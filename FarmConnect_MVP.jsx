@@ -1,4 +1,5 @@
-import { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { supabase } from "./supabaseClient";
 
 // ─── DESIGN TOKENS ───────────────────────────────────────────────
 const G = {
@@ -383,25 +384,6 @@ const css = `
 `;
 
 // ─── DATA ────────────────────────────────────────────────────────
-const PRODUCE = [
-  { id:1, name:"Tomatoes", farmer:"Raman Patel", village:"Erode", emoji:"🍅", price:28, msP:22, unit:"kg", qty:500, organic:true, express:false, delivery:"Tomorrow", rating:4.8, reviews:32, category:"Vegetables" },
-  { id:2, name:"Green Beans", farmer:"Lakshmi Devi", village:"Coimbatore", emoji:"🫘", price:45, msP:38, unit:"kg", qty:200, organic:false, express:true, delivery:"Today", rating:4.6, reviews:18, category:"Vegetables" },
-  { id:3, name:"Bananas", farmer:"Murugan K.", village:"Theni", emoji:"🍌", price:32, msP:25, unit:"kg", qty:800, organic:true, express:false, delivery:"2 days", rating:4.9, reviews:54, category:"Fruits" },
-  { id:4, name:"Spinach", farmer:"Priya Subramanian", village:"Madurai", emoji:"🥬", price:22, msP:18, unit:"kg", qty:150, organic:true, express:true, delivery:"Today", rating:4.7, reviews:22, category:"Vegetables" },
-  { id:5, name:"Onions", farmer:"Ganesh Raj", village:"Tirupur", emoji:"🧅", price:18, msP:14, unit:"kg", qty:1200, organic:false, express:false, delivery:"Tomorrow", rating:4.4, reviews:41, category:"Vegetables" },
-  { id:6, name:"Mangoes", farmer:"Selvam Kumar", village:"Salem", emoji:"🥭", price:95, msP:80, unit:"kg", qty:400, organic:true, express:false, delivery:"2 days", rating:5.0, reviews:67, category:"Fruits" },
-  { id:7, name:"Carrots", farmer:"Meena Krishnan", village:"Ooty", emoji:"🥕", price:38, msP:30, unit:"kg", qty:300, organic:true, express:true, delivery:"Today", rating:4.8, reviews:29, category:"Vegetables" },
-  { id:8, name:"Coconuts", farmer:"Balu Nair", village:"Pollachi", emoji:"🥥", price:25, msP:20, unit:"piece", qty:2000, organic:false, express:false, delivery:"Tomorrow", rating:4.5, reviews:38, category:"Other" },
-];
-
-const ORDERS = [
-  { id:"FC2401", produce:"Tomatoes", farmer:"Raman Patel", buyer:"Hotel Saravana Bhavan", qty:100, amount:2800, status:"delivered", date:"15 Jun", payment:"UPI", gst:504 },
-  { id:"FC2402", produce:"Bananas", farmer:"Murugan K.", buyer:"ITC Hotels Chennai", qty:250, amount:8000, status:"in-transit", date:"17 Jun", payment:"NEFT", gst:1440 },
-  { id:"FC2403", produce:"Spinach", farmer:"Priya S.", buyer:"Chennai Public School", qty:50, amount:1100, status:"confirmed", date:"18 Jun", payment:"UPI", gst:198 },
-  { id:"FC2404", produce:"Onions", farmer:"Ganesh Raj", buyer:"Star Hotels Pvt Ltd", qty:500, amount:9000, status:"pending", date:"19 Jun", payment:"Credit", gst:1620 },
-  { id:"FC2405", produce:"Mangoes", farmer:"Selvam Kumar", buyer:"Spencers Retail", qty:200, amount:19000, status:"delivered", date:"20 Jun", payment:"NEFT", gst:3420 },
-];
-
 const CHART_DATA = [
   { label:"Jan", val:12 }, { label:"Feb", val:18 }, { label:"Mar", val:15 },
   { label:"Apr", val:28 }, { label:"May", val:35 }, { label:"Jun", val:42 },
@@ -412,6 +394,67 @@ const statusConfig = {
   "in-transit":{ cls:"pill-blue",  icon:"🚛", label:"In Transit" },
   confirmed:  { cls:"pill-purple", icon:"✅", label:"Confirmed" },
   pending:    { cls:"pill-amber",  icon:"⏳", label:"Pending" },
+};
+
+const normalizeProduce = (row) => ({
+  id: row.id ?? row.listing_id ?? row.listingId,
+  name: row.name || row.produce_name || row.produce || "Produce",
+  farmer: row.farmer || "Local Farmer",
+  village: row.village || "Tamil Nadu",
+  emoji: row.emoji || "🌾",
+  price: Number(row.price ?? row.price_per_kg ?? row.pricePerKg ?? 0),
+  msP: Number(row.ms_p ?? row.mandi_price ?? row.mandiPrice ?? row.price ?? 0),
+  unit: row.unit || "kg",
+  qty: Number(row.qty ?? row.quantity ?? 0),
+  organic: Boolean(row.organic),
+  express: Boolean(row.express),
+  delivery: row.delivery || "Tomorrow",
+  rating: Number(row.rating ?? 4.8),
+  reviews: Number(row.reviews ?? 10),
+  category: row.category || "Vegetables",
+  created_at: row.created_at,
+});
+
+const normalizeOrder = (row) => ({
+  id: row.id ?? row.order_id ?? row.orderId ?? `FC${Math.floor(Math.random()*9000)+1000}`,
+  produce: row.produce || row.produce_name || "Produce",
+  farmer: row.farmer || "Unknown Farmer",
+  buyer: row.buyer || "Guest Buyer",
+  qty: Number(row.qty ?? row.quantity ?? 0),
+  amount: Number(row.amount ?? row.total ?? 0),
+  status: row.status || "pending",
+  date: row.date || new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+  payment: row.payment || "UPI",
+  gst: Number(row.gst ?? 0),
+  created_at: row.created_at,
+});
+
+const loadProduceFromSupabase = async (setter) => {
+  if (!supabase) return;
+  const { data, error } = await supabase.from("produce_listings").select("*").order("created_at", { ascending: false });
+  if (!error && data) {
+    setter(data.map(normalizeProduce));
+  }
+};
+
+const loadOrdersFromSupabase = async (setter) => {
+  if (!supabase) return;
+  const { data, error } = await supabase.from("orders").select("*").order("created_at", { ascending: false });
+  if (!error && data) {
+    setter(data.map(normalizeOrder));
+  }
+};
+
+const saveProduceToSupabase = async (payload) => {
+  if (!supabase) return null;
+  const { data, error } = await supabase.from("produce_listings").insert([payload]).select("*").single();
+  return error ? null : normalizeProduce(data);
+};
+
+const saveOrderToSupabase = async (payload) => {
+  if (!supabase) return null;
+  const { data, error } = await supabase.from("orders").insert([payload]).select("*").single();
+  return error ? null : normalizeOrder(data);
 };
 
 // ─── COMPONENTS ──────────────────────────────────────────────────
@@ -501,10 +544,26 @@ function FarmerDashboard() {
   const [view, setView] = useState("home");
   const [toast, setToast] = useState(null);
   const [listingForm, setListingForm] = useState({ produce:"", qty:"", price:"", date:"", organic:false });
+  const [produceItems, setProduceItems] = useState([]);
+  const [ordersData, setOrdersData] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+    const loadData = async () => {
+      await loadProduceFromSupabase((rows) => {
+        if (active && rows.length) setProduceItems(rows);
+      });
+      await loadOrdersFromSupabase((rows) => {
+        if (active && rows.length) setOrdersData(rows);
+      });
+    };
+    loadData();
+    return () => { active = false; };
+  }, []);
 
   const showToast = (msg) => { setToast(msg); setTimeout(()=>setToast(null),3200); };
 
-  const myOrders = ORDERS.filter(o=>o.farmer.includes("Raman") || o.farmer.includes("Murugan"));
+  const myOrders = ordersData.filter(o=>o.farmer.includes("Raman") || o.farmer.includes("Murugan"));
 
   const nav = [
     { key:"home", icon:"🏠", label:"Home" },
@@ -665,7 +724,34 @@ function FarmerDashboard() {
 
           <div style={{display:"flex",gap:12}}>
             <button className="btn btn-outline">Save as Draft</button>
-            <button className="btn btn-primary" onClick={()=>{showToast("Produce listed! Buyers can now see your listing.");setView("listings");}}>
+            <button className="btn btn-primary" onClick={async ()=>{
+              if (!listingForm.produce || !listingForm.qty || !listingForm.price) {
+                showToast("Please complete produce, quantity, and price.");
+                return;
+              }
+              const payload = {
+                name: listingForm.produce,
+                farmer: "Raman Patel",
+                village: "Erode",
+                emoji: "🌾",
+                price: Number(listingForm.price),
+                ms_p: Number(listingForm.price) - 3,
+                unit: "kg",
+                qty: Number(listingForm.qty),
+                organic: listingForm.organic,
+                express: false,
+                delivery: listingForm.date ? "Tomorrow" : "Today",
+                rating: 4.8,
+                reviews: 12,
+                category: "Vegetables",
+              };
+              const saved = await saveProduceToSupabase(payload);
+              if (saved) {
+                setProduceItems(prev => [saved, ...prev]);
+              }
+              showToast(saved ? "Produce saved to Supabase" : "Listing staged locally for demo");
+              setView("listings");
+            }}>
               🚀 Publish Listing
             </button>
           </div>
@@ -675,7 +761,7 @@ function FarmerDashboard() {
           <div className="page-title">My Listings</div>
           <div className="page-subtitle">3 active · 1 draft · 2 sold out</div>
           <div className="produce-grid">
-            {PRODUCE.slice(0,4).map(p=>(
+            {produceItems.slice(0,4).map(p=>(
               <div className="produce-card" key={p.id}>
                 <div className="produce-emoji">{p.emoji}</div>
                 <div className="produce-body">
@@ -795,27 +881,61 @@ function FarmerDashboard() {
 function BuyerDashboard() {
   const [view, setView] = useState("browse");
   const [modal, setModal] = useState(null);
-  const [orders, setOrders] = useState(ORDERS);
+  const [orders, setOrders] = useState([]);
+  const [produceItems, setProduceItems] = useState([]);
   const [toast, setToast] = useState(null);
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
 
+  useEffect(() => {
+    let active = true;
+    const loadData = async () => {
+      await loadProduceFromSupabase((rows) => {
+        if (active && rows.length) setProduceItems(rows);
+      });
+      await loadOrdersFromSupabase((rows) => {
+        if (active && rows.length) setOrders(rows);
+      });
+    };
+    loadData();
+    return () => { active = false; };
+  }, []);
+
   const showToast = (msg) => { setToast(msg); setTimeout(()=>setToast(null),3200); };
 
-  const placeOrder = (item, qty, total) => {
-    const newOrder = {
-      id:`FC${2406+orders.length}`, produce:item.name, farmer:item.farmer,
-      buyer:"Hotel Saravana Bhavan", qty, amount:total, status:"pending",
-      date:"20 Jun", payment:"UPI", gst:Math.round(total*0.05*0.18)
+  const placeOrder = async (item, qty, total) => {
+    const newOrderPayload = {
+      produce:item.name,
+      farmer:item.farmer,
+      buyer:"Hotel Saravana Bhavan",
+      qty,
+      amount:total,
+      status:"pending",
+      date:new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+      payment:"UPI",
+      gst:Math.round(total*0.05*0.18)
     };
-    setOrders([newOrder,...orders]);
+    const saved = await saveOrderToSupabase(newOrderPayload);
+    if (saved) {
+      setOrders([saved,...orders]);
+    }
     setModal(null);
-    showToast(`Order placed! ₹${total.toLocaleString()} held in escrow.`);
+    showToast(saved ? `Order placed in Supabase! ₹${total.toLocaleString()} held in escrow.` : `Order placed locally! ₹${total.toLocaleString()} held in escrow.`);
     setView("orders");
   };
 
   const cats = ["All","Vegetables","Fruits","Other"];
-  const filtered = PRODUCE.filter(p=>(filter==="All"||p.category===filter) && p.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = produceItems.filter(p => {
+    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase());
+    const matchesFilter = filter === "All"
+      ? true
+      : filter === "express"
+        ? p.express
+        : filter === "organic"
+          ? p.organic
+          : p.category === filter;
+    return matchesSearch && matchesFilter;
+  });
 
   const nav = [
     { key:"browse", icon:"🛒", label:"Browse Market" },
@@ -998,11 +1118,27 @@ function BuyerDashboard() {
 function AdminDashboard({ role }) {
   const [view, setView] = useState("overview");
   const [toast, setToast] = useState(null);
+  const [orders, setOrders] = useState([]);
+  const [produceItems, setProduceItems] = useState([]);
   const isGovt = role==="govt";
   const showToast = msg => { setToast(msg); setTimeout(()=>setToast(null),3200); };
 
-  const totalGMV = ORDERS.reduce((s,o)=>s+o.amount,0);
-  const totalGST = ORDERS.reduce((s,o)=>s+o.gst,0);
+  useEffect(() => {
+    let active = true;
+    const loadData = async () => {
+      await loadProduceFromSupabase((rows) => {
+        if (active && rows.length) setProduceItems(rows);
+      });
+      await loadOrdersFromSupabase((rows) => {
+        if (active && rows.length) setOrders(rows);
+      });
+    };
+    loadData();
+    return () => { active = false; };
+  }, []);
+
+  const totalGMV = orders.reduce((s,o)=>s+o.amount,0);
+  const totalGST = orders.reduce((s,o)=>s+o.gst,0);
 
   const nav = isGovt ? [
     { key:"overview", icon:"🏛️", label:"Overview" },
@@ -1047,7 +1183,7 @@ function AdminDashboard({ role }) {
               <div className="govt-sub">Tamil Nadu Agricultural Marketplace · Real-time read-only access · June 2024</div>
               <div className="govt-grid">
                 <div className="govt-stat"><div className="govt-stat-val">₹{totalGST.toLocaleString()}</div><div className="govt-stat-lbl">GST Collected</div></div>
-                <div className="govt-stat"><div className="govt-stat-val">{ORDERS.length}</div><div className="govt-stat-lbl">Verified Txns</div></div>
+                <div className="govt-stat"><div className="govt-stat-val">{orders.length}</div><div className="govt-stat-lbl">Verified Txns</div></div>
                 <div className="govt-stat"><div className="govt-stat-val">2,847</div><div className="govt-stat-lbl">Farmers Covered</div></div>
                 <div className="govt-stat"><div className="govt-stat-val">₹{totalGMV.toLocaleString()}</div><div className="govt-stat-lbl">Total GMV</div></div>
               </div>
@@ -1130,7 +1266,7 @@ function AdminDashboard({ role }) {
             <table>
               <thead><tr><th>Farmer</th><th>Village</th><th>Crops</th><th>Monthly Income</th><th>Income Boost</th><th>Rating</th><th>Status</th></tr></thead>
               <tbody>
-                {PRODUCE.map(p=>(
+                {produceItems.map(p=>(
                   <tr key={p.id}>
                     <td style={{fontWeight:600}}>{p.farmer}</td>
                     <td>{p.village}</td>
@@ -1254,11 +1390,35 @@ function AdminDashboard({ role }) {
 // ─── ROOT APP ────────────────────────────────────────────────────
 export default function App() {
   const [role, setRole] = useState(null);
+  const [supabaseStatus, setSupabaseStatus] = useState({ state: "checking" });
+
+  useEffect(() => {
+    let active = true;
+    const checkSupabase = async () => {
+      if (!supabase) {
+        if (active) setSupabaseStatus({ state: "missing-config" });
+        return;
+      }
+      const { error } = await supabase.from("produce_listings").select("id", { head: true, count: "exact" }).limit(1);
+      if (active) {
+        setSupabaseStatus(error ? { state: "tables-missing", error } : { state: "connected" });
+      }
+    };
+    checkSupabase();
+    return () => { active = false; };
+  }, []);
 
   if (!role) {
     return (
       <div className="app">
         <style>{css}</style>
+        {supabaseStatus.state !== "connected" && (
+          <div style={{background: supabaseStatus.state === "missing-config" ? "#FFF7ED" : "#FEF3C7", color: "#92400E", padding: "10px 28px", fontSize: 13, borderBottom: "1px solid #FCD34D"}}>
+            {supabaseStatus.state === "missing-config"
+              ? "Supabase is not configured yet. Add your URL and anon key to .env."
+              : "Supabase is configured, but the database tables are not created yet. Run the SQL from supabase-schema.sql in your Supabase SQL editor."}
+          </div>
+        )}
         <div className="topbar">
           <div className="topbar-brand">🌱 Farm<span>Connect</span></div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.5)"}}>India's Transparent Farm-to-Buyer Marketplace</div>
@@ -1326,6 +1486,13 @@ export default function App() {
   return (
     <div className="app">
       <style>{css}</style>
+      {supabaseStatus.state !== "connected" && (
+        <div style={{background: supabaseStatus.state === "missing-config" ? "#FFF7ED" : "#FEF3C7", color: "#92400E", padding: "10px 28px", fontSize: 13, borderBottom: "1px solid #FCD34D"}}>
+          {supabaseStatus.state === "missing-config"
+            ? "Supabase is not configured yet. Add your URL and anon key to .env."
+            : "Supabase is configured, but the database tables are not created yet. Run the SQL from supabase-schema.sql in your Supabase SQL editor."}
+        </div>
+      )}
       <div className="topbar">
         <div className="topbar-brand">🌱 Farm<span>Connect</span></div>
         <div className="topbar-nav">
