@@ -431,7 +431,7 @@ const normalizeOrder = (row) => ({
 
 const loadProduceFromSupabase = async (setter) => {
   if (!supabase) return;
-  const { data, error } = await supabase.from("produce_listings").select("*").order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("products").select("*").order("created_at", { ascending: false });
   if (!error && data) {
     setter(data.map(normalizeProduce));
   }
@@ -447,14 +447,33 @@ const loadOrdersFromSupabase = async (setter) => {
 
 const saveProduceToSupabase = async (payload) => {
   if (!supabase) return null;
-  const { data, error } = await supabase.from("produce_listings").insert([payload]).select("*").single();
+  const { data, error } = await supabase.from("products").insert([payload]).select("*").single();
   return error ? null : normalizeProduce(data);
 };
 
 const saveOrderToSupabase = async (payload) => {
   if (!supabase) return null;
-  const { data, error } = await supabase.from("orders").insert([payload]).select("*").single();
+  const { data: { user } = {} } = await supabase.auth.getUser();
+  const orderPayload = {
+    ...payload,
+    user_id: payload.user_id ?? user?.id ?? null,
+    buyer_id: payload.buyer_id ?? user?.id ?? null,
+  };
+  const { data, error } = await supabase.from("orders").insert([orderPayload]).select("*").single();
   return error ? null : normalizeOrder(data);
+};
+
+const createProfileForUser = async ({ id, email, fullName, role = "Buyer" }) => {
+  if (!supabase || !id) return null;
+  const profilePayload = {
+    id,
+    email,
+    full_name: fullName,
+    role,
+    created_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase.from("profiles").upsert(profilePayload, { onConflict: "id" }).select("*").single();
+  return error ? null : data;
 };
 
 // ─── COMPONENTS ──────────────────────────────────────────────────
@@ -1391,6 +1410,13 @@ function AdminDashboard({ role }) {
 export default function App() {
   const [role, setRole] = useState(null);
   const [supabaseStatus, setSupabaseStatus] = useState({ state: "checking" });
+  const [authMode, setAuthMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+  const [session, setSession] = useState(null);
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -1407,6 +1433,82 @@ export default function App() {
     checkSupabase();
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    let active = true;
+    const loadSession = async () => {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!active) return;
+      setSession(currentSession);
+      setUser(currentSession?.user ?? null);
+    };
+
+    loadSession();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+      if (!active) return;
+      setSession(currentSession);
+      setUser(currentSession?.user ?? null);
+      if (_event === "SIGNED_IN") setAuthMessage("Signed in successfully.");
+      if (_event === "SIGNED_OUT") setAuthMessage("Signed out.");
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleAuthSubmit = async (event) => {
+    event.preventDefault();
+    if (!supabase) {
+      setAuthMessage("Supabase is not configured yet. Add your URL and anon key first.");
+      return;
+    }
+    if (!email || !password) {
+      setAuthMessage("Please enter both email and password.");
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthMessage("");
+
+    try {
+      if (authMode === "signup") {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        if (data?.user) {
+          await createProfileForUser({ id: data.user.id, email: data.user.email, fullName: email.split("@")[0], role: "Buyer" });
+        }
+        setAuthMessage("Account created. Check your email if confirmation is enabled.");
+        setAuthMode("signin");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        setAuthMessage("Signed in successfully.");
+      }
+    } catch (error) {
+      setAuthMessage(error?.message || "Authentication failed.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setRole(null);
+    setAuthMessage("Signed out.");
+  };
+
+  const openRole = (nextRole) => {
+    if (!session) {
+      setAuthMessage("Please sign in first to enter the platform.");
+      return;
+    }
+    setRole(nextRole);
+  };
 
   if (!role) {
     return (
@@ -1439,30 +1541,64 @@ export default function App() {
             <div className="flow-node amber"><div className="flow-node-title">🏛️ Govt</div><div className="flow-node-sub">GST collected</div></div>
           </div>
 
+          <div className="form-section" style={{maxWidth: 460, width: "100%"}}>
+            <div className="form-section-title">Supabase Authentication</div>
+            {authMessage && (
+              <div className={`alert ${authMessage.includes("success") || authMessage.includes("created") || authMessage.includes("Signed") ? "alert-green" : "alert-amber"}`}>
+                {authMessage}
+              </div>
+            )}
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              <button type="button" className={`btn ${authMode === "signin" ? "btn-primary" : "btn-outline"}`} onClick={()=>setAuthMode("signin")}>Sign In</button>
+              <button type="button" className={`btn ${authMode === "signup" ? "btn-primary" : "btn-outline"}`} onClick={()=>setAuthMode("signup")}>Sign Up</button>
+            </div>
+            <form onSubmit={handleAuthSubmit}>
+              <div className="form-group">
+                <label className="form-label">Email</label>
+                <input className="form-input" type="email" value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="you@example.com" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <input className="form-input" type="password" value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="At least 6 characters" />
+              </div>
+              <button className="btn btn-primary" type="submit" disabled={authLoading}>
+                {authLoading ? "Working..." : authMode === "signup" ? "Create Account" : "Sign In"}
+              </button>
+            </form>
+            {session && user && (
+              <div className="alert alert-green" style={{marginTop:12}}>
+                Signed in as {user.email}
+              </div>
+            )}
+            <div style={{fontSize:12,color:G.stone,marginTop:10}}>
+              Supabase Auth is now active. Use this form to log in or create a new account before entering a dashboard.
+            </div>
+          </div>
+
           <div style={{textAlign:"center",marginTop:-20,marginBottom:8}}>
             <div style={{fontSize:13,color:G.stone}}>Choose your role to enter the platform</div>
           </div>
 
           <div className="role-cards">
-            <div className="role-card farmer" onClick={()=>setRole("farmer")}>
+            <div className="role-card farmer" onClick={()=>openRole("farmer")}>
               <div className="role-icon">🌾</div>
               <div className="role-title">Farmer</div>
               <div className="role-desc">List your produce, get fair prices, track earnings & govt schemes</div>
               <div className="role-tag">Sell Direct</div>
             </div>
-            <div className="role-card buyer" onClick={()=>setRole("buyer")}>
+            <div className="role-card buyer" onClick={()=>openRole("buyer")}>
               <div className="role-icon">🏨</div>
               <div className="role-title">Hotel / Buyer</div>
               <div className="role-desc">Browse fresh produce, place orders, download GST invoices</div>
               <div className="role-tag buyer-tag">Buy Fresh</div>
             </div>
-            <div className="role-card admin" onClick={()=>setRole("admin")}>
+            <div className="role-card admin" onClick={()=>openRole("admin")}>
               <div className="role-icon">⚙️</div>
               <div className="role-title">Admin Panel</div>
               <div className="role-desc">Full platform oversight, transactions, compliance & audit</div>
               <div className="role-tag admin-tag">FarmConnect HQ</div>
             </div>
-            <div className="role-card" onClick={()=>setRole("govt")} style={{"--hover-color":"#3B82F6"}}>
+            <div className="role-card" onClick={()=>openRole("govt")} style={{"--hover-color":"#3B82F6"}}>
               <div className="role-icon">🏛️</div>
               <div className="role-title">Government</div>
               <div className="role-desc">Read-only dashboard for tax data, scheme impact & farmer stats</div>
@@ -1501,6 +1637,12 @@ export default function App() {
           <button className={`nav-btn${role==="admin"?" active":""}`} onClick={()=>setRole("admin")}>⚙️ Admin</button>
           <button className={`nav-btn${role==="govt"?" active":""}`} onClick={()=>setRole("govt")}>🏛️ Govt</button>
           <button className="nav-btn" onClick={()=>setRole(null)} style={{color:"rgba(255,255,255,0.4)"}}>← Home</button>
+          {session && user && (
+            <span className="nav-btn" style={{color:"rgba(255,255,255,0.85)", cursor:"default"}}>{user.email}</span>
+          )}
+          {session && (
+            <button className="nav-btn" onClick={handleSignOut}>↪ Sign out</button>
+          )}
         </div>
       </div>
       {role==="farmer" && <FarmerDashboard/>}
