@@ -396,6 +396,22 @@ const statusConfig = {
   pending:    { cls:"pill-amber",  icon:"⏳", label:"Pending" },
 };
 
+const computeQaScore = (product) => {
+  const baseScore = Number(product.rating ?? 4.8) * 20;
+  const organicBonus = product.organic ? 6 : 0;
+  const expressBonus = product.express ? 3 : 0;
+  const quantityBonus = product.qty > 500 ? 2 : 0;
+  return Math.min(100, Math.round(baseScore + organicBonus + expressBonus + quantityBonus));
+};
+
+const getQaGrade = (score) => {
+  if (score >= 90) return "A";
+  if (score >= 80) return "B";
+  if (score >= 70) return "C";
+  if (score >= 60) return "D";
+  return "E";
+};
+
 const normalizeProduce = (row) => ({
   id: row.id ?? row.listing_id ?? row.listingId,
   name: row.name || row.produce_name || row.produce || "Produce",
@@ -412,6 +428,18 @@ const normalizeProduce = (row) => ({
   rating: Number(row.rating ?? 4.8),
   reviews: Number(row.reviews ?? 10),
   category: row.category || "Vegetables",
+  qaScore: Number(row.qa_score ?? row.qaScore ?? computeQaScore({
+    rating: Number(row.rating ?? 4.8),
+    organic: Boolean(row.organic),
+    express: Boolean(row.express),
+    qty: Number(row.qty ?? row.quantity ?? 0),
+  })),
+  qaGrade: getQaGrade(Number(row.qa_score ?? row.qaScore ?? computeQaScore({
+    rating: Number(row.rating ?? 4.8),
+    organic: Boolean(row.organic),
+    express: Boolean(row.express),
+    qty: Number(row.qty ?? row.quantity ?? 0),
+  }))),
   created_at: row.created_at,
 });
 
@@ -474,6 +502,31 @@ const createProfileForUser = async ({ id, email, fullName, role = "Buyer" }) => 
   };
   const { data, error } = await supabase.from("profiles").upsert(profilePayload, { onConflict: "id" }).select("*").single();
   return error ? null : data;
+};
+
+const normalizeRoleValue = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["farmer", "farmerrole", "grower"].includes(normalized)) return "farmer";
+  if (["buyer", "hotel", "hotelbuyer", "buyerrole"].includes(normalized)) return "buyer";
+  if (["admin", "administrator", "superadmin", "super-admin"].includes(normalized)) return "admin";
+  if (["govt", "government", "govtrole", "official"].includes(normalized)) return "govt";
+  return "buyer";
+};
+
+const getRoleLabel = (value) => {
+  const normalized = normalizeRoleValue(value);
+  if (normalized === "farmer") return "Farmer";
+  if (normalized === "admin") return "Admin";
+  if (normalized === "govt") return "Government";
+  return "Buyer";
+};
+
+const getRoleValueForSignup = (value) => {
+  const normalized = normalizeRoleValue(value);
+  if (normalized === "farmer") return "Farmer";
+  if (normalized === "admin") return "Admin";
+  if (normalized === "govt") return "Government";
+  return "Buyer";
 };
 
 // ─── COMPONENTS ──────────────────────────────────────────────────
@@ -794,6 +847,14 @@ function FarmerDashboard() {
                   </div>
                   <div className="stock-bar"><div className="stock-fill" style={{width:`${(p.qty/1200)*100}%`}}/></div>
                   <div style={{fontSize:11,color:G.stone,marginTop:4}}>{p.qty} {p.unit} remaining</div>
+                  <div style={{marginTop:8,display:"flex",justifyContent:"space-between",fontSize:11,color:G.stone}}>
+                    <span>QA Score</span>
+                    <span style={{fontWeight:700,color:G.leaf}}>{p.qaScore}/100</span>
+                  </div>
+                  <div style={{marginTop:4,display:"flex",justifyContent:"space-between",fontSize:11,color:G.stone}}>
+                    <span>Grade</span>
+                    <span style={{fontWeight:700,color:G.amber}}>Grade {p.qaGrade}</span>
+                  </div>
                 </div>
               </div>
             ))}
@@ -1040,6 +1101,14 @@ function BuyerDashboard() {
                   <div style={{marginTop:10,display:"flex",alignItems:"center",gap:4,fontSize:11,color:G.stone}}>
                     ⭐{p.rating} <span>({p.reviews} reviews)</span>
                   </div>
+                  <div style={{marginTop:6,display:"flex",justifyContent:"space-between",fontSize:11,color:G.stone}}>
+                    <span>QA Score</span>
+                    <span style={{fontWeight:700,color:G.leaf}}>{p.qaScore}/100</span>
+                  </div>
+                  <div style={{marginTop:4,display:"flex",justifyContent:"space-between",fontSize:11,color:G.stone}}>
+                    <span>Grade</span>
+                    <span style={{fontWeight:700,color:G.amber}}>Grade {p.qaGrade}</span>
+                  </div>
                 </div>
               </div>
             ))}
@@ -1139,6 +1208,9 @@ function AdminDashboard({ role }) {
   const [toast, setToast] = useState(null);
   const [orders, setOrders] = useState([]);
   const [produceItems, setProduceItems] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [profileStatus, setProfileStatus] = useState("loading");
+  const [updatingProfileId, setUpdatingProfileId] = useState(null);
   const isGovt = role==="govt";
   const showToast = msg => { setToast(msg); setTimeout(()=>setToast(null),3200); };
 
@@ -1151,10 +1223,21 @@ function AdminDashboard({ role }) {
       await loadOrdersFromSupabase((rows) => {
         if (active && rows.length) setOrders(rows);
       });
+
+      if (!supabase || isGovt) return;
+      const { data, error } = await supabase.from("profiles").select("id,email,full_name,role").order("created_at", { ascending: false });
+      if (!active) return;
+      if (!error && data) {
+        setProfiles(data);
+        setProfileStatus("ready");
+      } else {
+        setProfiles([]);
+        setProfileStatus(error?.message || "failed");
+      }
     };
     loadData();
     return () => { active = false; };
-  }, []);
+  }, [isGovt]);
 
   const totalGMV = orders.reduce((s,o)=>s+o.amount,0);
   const totalGST = orders.reduce((s,o)=>s+o.gst,0);
@@ -1169,9 +1252,26 @@ function AdminDashboard({ role }) {
     { key:"transactions", icon:"💳", label:"All Transactions" },
     { key:"farmers", icon:"🌾", label:"Farmers" },
     { key:"buyers", icon:"🏨", label:"Buyers" },
+    { key:"users", icon:"👤", label:"Users" },
     { key:"disputes", icon:"⚠️", label:"Disputes" },
     { key:"compliance", icon:"📜", label:"Compliance" },
   ];
+
+  const updateUserRole = async (profileId, nextRole) => {
+    if (!supabase) return;
+    setUpdatingProfileId(profileId);
+    const roleValue = getRoleValueForSignup(nextRole);
+    const { error } = await supabase.from("profiles").update({ role: roleValue }).eq("id", profileId);
+    setUpdatingProfileId(null);
+    if (error) {
+      setProfileStatus(error.message || "Unable to update role");
+      showToast("Unable to update role");
+      return;
+    }
+    setProfiles(prev => prev.map(profile => profile.id === profileId ? { ...profile, role: roleValue } : profile));
+    setProfileStatus("ready");
+    showToast("Role updated successfully");
+  };
 
   return (
     <div className="main">
@@ -1270,6 +1370,44 @@ function AdminDashboard({ role }) {
                 ))}
               </tbody>
             </table>
+          </div>
+        </>}
+
+        {!isGovt && view==="users" && <>
+          <div className="page-title">User Access Control</div>
+          <div className="page-subtitle">Manage who can enter the Farmer, Buyer, Admin, and Government dashboards</div>
+          <div className="form-section">
+            {profileStatus === "loading" && <div className="alert alert-blue">Loading user profiles…</div>}
+            {profileStatus !== "loading" && profileStatus !== "ready" && (
+              <div className="alert alert-amber">{profileStatus}</div>
+            )}
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>User</th><th>Email</th><th>Current Role</th><th>Change Role</th></tr></thead>
+                <tbody>
+                  {profiles.map(profile => (
+                    <tr key={profile.id}>
+                      <td>{profile.full_name || "Unnamed user"}</td>
+                      <td style={{fontSize:12,color:G.stone}}>{profile.email || "—"}</td>
+                      <td><span className="pill pill-blue"><span className="dot"/>{getRoleLabel(profile.role)}</span></td>
+                      <td>
+                        <select
+                          className="form-select"
+                          value={normalizeRoleValue(profile.role)}
+                          onChange={(e) => updateUserRole(profile.id, e.target.value)}
+                          disabled={updatingProfileId === profile.id}
+                        >
+                          <option value="buyer">Buyer</option>
+                          <option value="farmer">Farmer</option>
+                          <option value="admin">Admin</option>
+                          <option value="govt">Government</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>}
 
@@ -1417,6 +1555,8 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
+  const [profileRole, setProfileRole] = useState(null);
+  const [signupRole, setSignupRole] = useState("buyer");
 
   useEffect(() => {
     let active = true;
@@ -1443,6 +1583,23 @@ export default function App() {
       if (!active) return;
       setSession(currentSession);
       setUser(currentSession?.user ?? null);
+      if (!currentSession?.user) {
+        setProfileRole(null);
+        setRole(null);
+        return;
+      }
+
+      const { data, error } = await supabase.from("profiles").select("role").eq("id", currentSession.user.id).maybeSingle();
+      if (!active) return;
+      if (error) {
+        const fallbackRole = "buyer";
+        setProfileRole(fallbackRole);
+        setRole(fallbackRole);
+        return;
+      }
+      const nextRole = normalizeRoleValue(data?.role);
+      setProfileRole(nextRole);
+      setRole(nextRole);
     };
 
     loadSession();
@@ -1450,8 +1607,17 @@ export default function App() {
       if (!active) return;
       setSession(currentSession);
       setUser(currentSession?.user ?? null);
+      if (!currentSession?.user) {
+        setProfileRole(null);
+        setRole(null);
+        return;
+      }
       if (_event === "SIGNED_IN") setAuthMessage("Signed in successfully.");
-      if (_event === "SIGNED_OUT") setAuthMessage("Signed out.");
+      if (_event === "SIGNED_OUT") {
+        setProfileRole(null);
+        setRole(null);
+        setAuthMessage("Signed out.");
+      }
     });
 
     return () => {
@@ -1479,7 +1645,8 @@ export default function App() {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data?.user) {
-          await createProfileForUser({ id: data.user.id, email: data.user.email, fullName: email.split("@")[0], role: "Buyer" });
+          await createProfileForUser({ id: data.user.id, email: data.user.email, fullName: email.split("@")[0], role: getRoleValueForSignup(signupRole) });
+          setProfileRole(normalizeRoleValue(signupRole));
         }
         setAuthMessage("Account created. Check your email if confirmation is enabled.");
         setAuthMode("signin");
@@ -1499,12 +1666,17 @@ export default function App() {
     if (!supabase) return;
     await supabase.auth.signOut();
     setRole(null);
+    setProfileRole(null);
     setAuthMessage("Signed out.");
   };
 
   const openRole = (nextRole) => {
     if (!session) {
       setAuthMessage("Please sign in first to enter the platform.");
+      return;
+    }
+    if (profileRole && normalizeRoleValue(nextRole) !== profileRole) {
+      setAuthMessage(`This account is assigned the ${getRoleLabel(profileRole)} role, so only that dashboard is available.`);
       return;
     }
     setRole(nextRole);
@@ -1561,6 +1733,17 @@ export default function App() {
                 <label className="form-label">Password</label>
                 <input className="form-input" type="password" value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="At least 6 characters" />
               </div>
+              {authMode === "signup" && (
+                <div className="form-group">
+                  <label className="form-label">Choose access role</label>
+                  <select className="form-select" value={signupRole} onChange={(e)=>setSignupRole(e.target.value)}>
+                    <option value="buyer">Buyer</option>
+                    <option value="farmer">Farmer</option>
+                    <option value="admin">Admin</option>
+                    <option value="govt">Government</option>
+                  </select>
+                </div>
+              )}
               <button className="btn btn-primary" type="submit" disabled={authLoading}>
                 {authLoading ? "Working..." : authMode === "signup" ? "Create Account" : "Sign In"}
               </button>
@@ -1578,6 +1761,12 @@ export default function App() {
           <div style={{textAlign:"center",marginTop:-20,marginBottom:8}}>
             <div style={{fontSize:13,color:G.stone}}>Choose your role to enter the platform</div>
           </div>
+
+          {session && profileRole && (
+            <div className="alert alert-blue" style={{maxWidth: 520, width: "100%"}}>
+              Your account is assigned the {getRoleLabel(profileRole)} role. Only that dashboard is available right now.
+            </div>
+          )}
 
           <div className="role-cards">
             <div className="role-card farmer" onClick={()=>openRole("farmer")}>

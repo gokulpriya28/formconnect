@@ -81,10 +81,36 @@ drop policy if exists "orders_update_own" on public.orders;
 
 create policy "profiles_select_own" on public.profiles
   for select using (auth.uid() = id);
+create policy "profiles_select_admin" on public.profiles
+  for select using (
+    exists (
+      select 1
+      from public.profiles as p
+      where p.id = auth.uid()
+        and lower(coalesce(p.role, 'Buyer')) in ('admin', 'government', 'govt')
+    )
+  );
 create policy "profiles_upsert_own" on public.profiles
   for insert with check (auth.uid() = id);
 create policy "profiles_update_own" on public.profiles
   for update using (auth.uid() = id);
+create policy "profiles_update_admin" on public.profiles
+  for update using (
+    exists (
+      select 1
+      from public.profiles as p
+      where p.id = auth.uid()
+        and lower(coalesce(p.role, 'Buyer')) in ('admin', 'government', 'govt')
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.profiles as p
+      where p.id = auth.uid()
+        and lower(coalesce(p.role, 'Buyer')) in ('admin', 'government', 'govt')
+    )
+  );
 
 create policy "products_select_all" on public.products
   for select using (true);
