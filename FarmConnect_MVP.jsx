@@ -510,6 +510,72 @@ const getRoleValueForSignup = (value) => {
   return "Buyer";
 };
 
+const ROLE_ACCESS = {
+  buyer: {
+    label: "Buyer",
+    dashboardLabel: "Buyer Dashboard",
+    icon: "🏨",
+    description: "Browse fresh produce, place orders, download GST invoices",
+    badge: "Buy Fresh",
+    badgeStyle: { background: "#EFF6FF", color: "#3B82F6" },
+    visibleRoles: ["buyer"],
+    permittedRoles: ["buyer"],
+    selfAssignable: true,
+  },
+  farmer: {
+    label: "Farmer",
+    dashboardLabel: "Farmer Dashboard",
+    icon: "🌾",
+    description: "List your produce, get fair prices, track earnings & govt schemes",
+    badge: "Sell Direct",
+    badgeStyle: { background: "#D8F3DC", color: "#1B4332" },
+    visibleRoles: ["farmer"],
+    permittedRoles: ["farmer"],
+    selfAssignable: true,
+  },
+  admin: {
+    label: "Admin",
+    dashboardLabel: "Admin Dashboard",
+    icon: "⚙️",
+    description: "Full platform oversight, transactions, compliance & audit",
+    badge: "FarmConnect HQ",
+    badgeStyle: { background: "#FFF7ED", color: "#E76F00" },
+    visibleRoles: ["admin", "govt"],
+    permittedRoles: ["admin", "govt"],
+    selfAssignable: false,
+  },
+  govt: {
+    label: "Government",
+    dashboardLabel: "Government Dashboard",
+    icon: "🏛️",
+    description: "Read-only dashboard for tax data, scheme impact & farmer stats",
+    badge: "TN Agri Dept",
+    badgeStyle: { background: "#EFF6FF", color: "#3B82F6" },
+    visibleRoles: ["govt"],
+    permittedRoles: ["govt"],
+    selfAssignable: false,
+  },
+};
+
+const getAllowedRolesForProfile = (profileRole) => {
+  const normalized = normalizeRoleValue(profileRole);
+  return ROLE_ACCESS[normalized]?.permittedRoles ?? [normalized];
+};
+
+const getVisibleRoleCards = (profileRole) => {
+  if (!profileRole) return Object.keys(ROLE_ACCESS).map((role) => ({ role, ...ROLE_ACCESS[role] }));
+  const normalized = normalizeRoleValue(profileRole);
+  const visibleRoles = ROLE_ACCESS[normalized]?.visibleRoles ?? [normalized];
+  return visibleRoles.map((role) => ({ role, ...ROLE_ACCESS[role] }));
+};
+
+const canAccessRole = (profileRole, targetRole) => {
+  const normalizedProfileRole = normalizeRoleValue(profileRole);
+  const normalizedTargetRole = normalizeRoleValue(targetRole);
+  const allowedRoles = getAllowedRolesForProfile(normalizedProfileRole);
+  return allowedRoles.includes(normalizedTargetRole);
+};
+
 // ─── PASSWORD STRENGTH BAR ────────────────────────────────────────
 function PasswordStrengthBar({ password }) {
   const score = passwordStrength(password);
@@ -1777,13 +1843,24 @@ export default function App() {
 
   const openRole = (nextRole) => {
     if (!session) { setAuthMessage("Please sign in first to enter the platform."); setAuthMessageType("amber"); return; }
-    if (profileRole && normalizeRoleValue(nextRole) !== profileRole) {
+
+    const normalizedTargetRole = normalizeRoleValue(nextRole);
+    const normalizedProfileRole = normalizeRoleValue(profileRole);
+
+    if (profileRole && !canAccessRole(profileRole, normalizedTargetRole)) {
+      setAuthMessage(`Your account is assigned the ${getRoleLabel(profileRole)} role. Only your permitted dashboard is available.`);
+      setAuthMessageType("amber");
+      return;
+    }
+
+    if (profileRole && normalizedProfileRole !== normalizedTargetRole) {
       setAuthMessage(`Your account is assigned the ${getRoleLabel(profileRole)} role. Only that dashboard is available.`);
       setAuthMessageType("amber");
       return;
     }
-    logEvent(LOG_EVENTS.ROLE_SWITCH, { role: nextRole }, user?.id);
-    setRole(nextRole);
+
+    logEvent(LOG_EVENTS.ROLE_SWITCH, { role: normalizedTargetRole }, user?.id);
+    setRole(normalizedTargetRole);
   };
 
   const handleConsentAccept = () => {
@@ -1922,30 +1999,21 @@ export default function App() {
           )}
 
           <div className="role-cards">
-            <div className="role-card farmer" onClick={() => openRole("farmer")} tabIndex={0} role="button" aria-label="Enter Farmer dashboard">
-              <div className="role-icon">🌾</div>
-              <div className="role-title">Farmer</div>
-              <div className="role-desc">List your produce, get fair prices, track earnings & govt schemes</div>
-              <div className="role-tag">Sell Direct</div>
-            </div>
-            <div className="role-card buyer" onClick={() => openRole("buyer")} tabIndex={0} role="button" aria-label="Enter Buyer dashboard">
-              <div className="role-icon">🏨</div>
-              <div className="role-title">Hotel / Buyer</div>
-              <div className="role-desc">Browse fresh produce, place orders, download GST invoices</div>
-              <div className="role-tag buyer-tag">Buy Fresh</div>
-            </div>
-            <div className="role-card admin" onClick={() => openRole("admin")} tabIndex={0} role="button" aria-label="Enter Admin dashboard">
-              <div className="role-icon">⚙️</div>
-              <div className="role-title">Admin Panel</div>
-              <div className="role-desc">Full platform oversight, transactions, compliance & audit</div>
-              <div className="role-tag admin-tag">FarmConnect HQ</div>
-            </div>
-            <div className="role-card" onClick={() => openRole("govt")} tabIndex={0} role="button" aria-label="Enter Government dashboard">
-              <div className="role-icon">🏛️</div>
-              <div className="role-title">Government</div>
-              <div className="role-desc">Read-only dashboard for tax data, scheme impact & farmer stats</div>
-              <div className="role-tag" style={{background:"#EFF6FF",color:"#3B82F6"}}>TN Agri Dept</div>
-            </div>
+            {getVisibleRoleCards(profileRole).map(({ role, label, icon, description, badge, badgeStyle }) => (
+              <div
+                key={role}
+                className={`role-card ${role}`}
+                onClick={() => openRole(role)}
+                tabIndex={0}
+                role="button"
+                aria-label={`Enter ${label} dashboard`}
+              >
+                <div className="role-icon">{icon}</div>
+                <div className="role-title">{label}</div>
+                <div className="role-desc">{description}</div>
+                <div className="role-tag" style={badgeStyle}>{badge}</div>
+              </div>
+            ))}
           </div>
 
           <div style={{display:"flex",gap:24,flexWrap:"wrap",justifyContent:"center",marginTop:8}}>
@@ -2021,10 +2089,15 @@ export default function App() {
       <div className="topbar">
         <div className="topbar-brand">🌱 Farm<span>Connect</span></div>
         <div className="topbar-nav">
-          <button className={`nav-btn${role==="farmer"?" active":""}`} onClick={() => setRole("farmer")}>🌾 Farmer</button>
-          <button className={`nav-btn${role==="buyer"?" active":""}`} onClick={() => setRole("buyer")}>🏨 Buyer</button>
-          <button className={`nav-btn${role==="admin"?" active":""}`} onClick={() => setRole("admin")}>⚙️ Admin</button>
-          <button className={`nav-btn${role==="govt"?" active":""}`} onClick={() => setRole("govt")}>🏛️ Govt</button>
+          {getVisibleRoleCards(profileRole).map(({ role: roleKey, label, icon }) => (
+            <button
+              key={roleKey}
+              className={`nav-btn${role===roleKey?" active":""}`}
+              onClick={() => openRole(roleKey)}
+            >
+              {icon} {label}
+            </button>
+          ))}
           <button className="nav-btn" onClick={() => setRole(null)} style={{color:"rgba(255,255,255,0.4)"}}>← Home</button>
           {session && user && <span className="nav-btn" style={{color:"rgba(255,255,255,0.85)",cursor:"default"}}>{user.email}</span>}
           {session && <button className="nav-btn" onClick={handleSignOut}>↪ Sign out</button>}
