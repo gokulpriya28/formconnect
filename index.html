@@ -3,7 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FarmConnect</title>
+    <title>FarmConnect — India's Transparent Farm-to-Buyer Marketplace</title>
+    <meta name="description" content="FarmConnect connects Tamil Nadu's farmers directly to hotels, restaurants, and corporates. No middlemen, no hidden fees." />
+
+    <!-- ── Security Headers (meta layer; set real HTTP headers on your host) ── -->
+    <!-- Content-Security-Policy: restricts sources to same origin + trusted CDNs -->
+    <meta http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        script-src 'self' 'unsafe-inline';
+        style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+        font-src 'self' https://fonts.gstatic.com;
+        img-src 'self' data: blob: https://*.supabase.co https://*.supabase.in;
+        connect-src 'self' https://*.supabase.co https://*.supabase.in wss://*.supabase.co;
+        frame-ancestors 'none';
+        form-action 'self';
+        base-uri 'self';
+      "
+    />
+    <!-- Prevent clickjacking -->
+    <meta http-equiv="X-Frame-Options" content="DENY" />
+    <!-- Prevent MIME-type sniffing -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <!-- Referrer policy -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <!-- Permissions policy: disable sensitive APIs not needed -->
+    <meta http-equiv="Permissions-Policy"
+      content="camera=(), microphone=(), geolocation=(), payment=()" />
+
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>" />
   </head>
   <body>
     <div id="root"></div>
