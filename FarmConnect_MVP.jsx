@@ -1785,12 +1785,25 @@ export default function App() {
     setAuthLoading(true); setAuthMessage(""); setPwErrors([]);
     try {
       if (authMode === "signup") {
-        const { data, error } = await supabase.auth.signUp({ email: email.trim().toLowerCase(), password });
+        const selectedRole = getRoleValueForSignup(signupRole).toLowerCase();
+        const normalizedRole = selectedRole === 'buyer' ? 'customer' : selectedRole;
+        
+        const { data, error } = await supabase.auth.signUp({ 
+          email: email.trim().toLowerCase(), 
+          password,
+          options: {
+            data: {
+              full_name: email.split("@")[0],
+              role: normalizedRole
+            }
+          }
+        });
+        
         if (error) throw error;
         if (data?.user) {
-          await createProfileForUser({ id: data.user.id, email: data.user.email, fullName: email.split("@")[0], role: getRoleValueForSignup(signupRole) });
-          setProfileRole(normalizeRoleValue(signupRole));
-          await logEvent(LOG_EVENTS.SIGNUP, { role: signupRole }, data.user.id);
+          // Supabase Database Trigger will automatically insert into public.users
+          setProfileRole(normalizedRole);
+          await logEvent(LOG_EVENTS.SIGNUP, { role: normalizedRole }, data.user.id);
         }
         setAuthMessage("Account created! Check your email to confirm your address before signing in."); setAuthMessageType("green");
         setAuthMode("signin");
