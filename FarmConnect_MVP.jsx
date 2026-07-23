@@ -376,19 +376,20 @@ const computeQaScore = (p) => Math.min(100, Math.round(Number(p.rating ?? 4.8) *
 const getQaGrade = (s) => s >= 90 ? "A" : s >= 80 ? "B" : s >= 70 ? "C" : s >= 60 ? "D" : "E";
 
 const normalizeProduce = (row) => {
-  const qs = Number(row.qa_score ?? row.qaScore ?? computeQaScore({ rating: Number(row.rating ?? 4.8), organic: Boolean(row.organic), express: Boolean(row.express), qty: Number(row.qty ?? 0) }));
+  const qs = Number(row.qa_score ?? row.qaScore ?? computeQaScore({ rating: Number(row.rating ?? 4.8), organic: Boolean(row.organic ?? true), express: Boolean(row.express ?? true), qty: Number(row.stock_quantity ?? row.qty ?? 0) }));
   return {
     id: row.id ?? row.listing_id,
     name: sanitizeText(row.name || row.produce || "Produce", 200),
-    farmer: sanitizeText(row.farmer || row.seller_name || "Local Farmer", 200),
+    farmer: sanitizeText(row.users?.full_name || row.farmer || row.seller_name || "Local Farmer", 200),
+    farmer_id: row.farmer_id || row.owner_id,
     village: sanitizeText(row.village || "Tamil Nadu", 100),
     emoji: row.emoji || "🌾",
     price: Number(row.price ?? 0),
     msP: Number(row.ms_p ?? row.price ?? 0),
     unit: sanitizeText(row.unit || "kg", 20),
-    qty: Number(row.qty ?? 0),
-    organic: Boolean(row.organic),
-    express: Boolean(row.express),
+    qty: Number(row.stock_quantity ?? row.qty ?? 0),
+    organic: Boolean(row.organic ?? true),
+    express: Boolean(row.express ?? true),
     delivery: sanitizeText(row.delivery || "Tomorrow", 50),
     rating: Number(row.rating ?? 4.8),
     reviews: Number(row.reviews ?? 10),
@@ -402,27 +403,31 @@ const normalizeProduce = (row) => {
 
 const normalizeOrder = (row) => ({
   id: row.id ?? `FC${Math.floor(Math.random()*9000)+1000}`,
-  produce: sanitizeText(row.produce || "Produce", 200),
-  farmer: sanitizeText(row.farmer || "Unknown Farmer", 200),
-  buyer: sanitizeText(row.buyer || "Guest Buyer", 200),
-  qty: Number(row.qty ?? 0),
-  amount: Number(row.amount ?? 0),
+  product_id: row.product_id,
+  produce: sanitizeText(row.products?.name || row.produce || "Produce", 200),
+  farmer: sanitizeText(row.farmer?.full_name || row.farmer || "Unknown Farmer", 200),
+  buyer: sanitizeText(row.customer?.full_name || row.buyer || "Guest Buyer", 200),
+  customer_id: row.customer_id,
+  farmer_id: row.farmer_id,
+  qty: Number(row.quantity ?? row.qty ?? 0),
+  amount: Number(row.total_price ?? row.amount ?? 0),
   status: row.status || "pending",
-  date: row.date || new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short" }),
+  date: row.date || new Date(row.created_at || Date.now()).toLocaleDateString("en-IN", { day:"2-digit", month:"short" }),
   payment: sanitizeText(row.payment || "UPI", 50),
-  gst: Number(row.gst ?? 0),
+  gst: Number(row.gst ?? Math.round((row.total_price || row.amount || 0) * 0.05 * 0.18)),
+  delivery_address: row.delivery_address || "Default Address",
   created_at: row.created_at,
 });
 
 const loadProduceFromSupabase = async (setter) => {
   if (!supabase) return;
-  const { data, error } = await supabase.from("products").select("*").order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("products").select("*, users(full_name)").order("created_at", { ascending: false });
   if (!error && data) setter(data.map(normalizeProduce));
 };
 
 const loadOrdersFromSupabase = async (setter) => {
   if (!supabase) return;
-  const { data, error } = await supabase.from("orders").select("*").order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("orders").select("*, products(name), customer:users!customer_id(full_name), farmer:users!farmer_id(full_name)").order("created_at", { ascending: false });
   if (!error && data) setter(data.map(normalizeOrder));
 };
 
@@ -430,26 +435,19 @@ const saveProduceToSupabase = async (payload) => {
   if (!supabase) return null;
   const { data: { user } = {} } = await supabase.auth.getUser();
   const dbPayload = {
-    owner_id: user?.id ?? null,
+    farmer_id: user?.id ?? null,
     name: sanitizeText(payload.name, 200),
-    seller_name: sanitizeText(payload.farmer || "Local Farmer", 200),
-    seller_role: "Farmer",
-    village: sanitizeText(payload.village || "Tamil Nadu", 100),
-    emoji: payload.emoji || "🌾",
+    description: sanitizeText(payload.name, 500),
     price: Number(payload.price ?? 0),
-    ms_p: Number(payload.ms_p ?? 0),
+    stock_quantity: Number(payload.qty ?? 0),
     unit: sanitizeText(payload.unit || "kg", 20),
-    qty: Number(payload.qty ?? 0),
-    organic: Boolean(payload.organic),
-    express: Boolean(payload.express),
-    delivery: sanitizeText(payload.delivery || "Tomorrow", 50),
-    rating: Number(payload.rating ?? 4.8),
-    reviews: Number(payload.reviews ?? 10),
-    category: sanitizeText(payload.category || "Vegetables", 100),
+    image_url: payload.image_url || null,
   };
-  const { data, error } = await supabase.from("products").insert([dbPayload]).select("*").single();
+  const { data, error } = await supabase.from("products").insert([dbPayload]).select("*, users(full_name)").single();
   if (!error && data) {
     await logEvent(LOG_EVENTS.PRODUCT_CREATE, { name: dbPayload.name }, user?.id);
+  } else if (error) {
+    console.error("Save produce error:", error);
   }
   return error ? null : normalizeProduce(data);
 };
@@ -458,16 +456,19 @@ const saveOrderToSupabase = async (payload) => {
   if (!supabase) return null;
   const { data: { user } = {} } = await supabase.auth.getUser();
   const orderPayload = {
-    ...payload,
-    produce: sanitizeText(payload.produce, 200),
-    farmer: sanitizeText(payload.farmer, 200),
-    buyer: sanitizeText(payload.buyer, 200),
-    user_id: payload.user_id ?? user?.id ?? null,
-    buyer_id: payload.buyer_id ?? user?.id ?? null,
+    customer_id: user?.id ?? null,
+    farmer_id: payload.farmer_id,
+    product_id: payload.product_id,
+    quantity: Number(payload.qty),
+    total_price: Number(payload.amount),
+    status: payload.status || 'pending',
+    delivery_address: payload.delivery_address || 'Default Address',
   };
-  const { data, error } = await supabase.from("orders").insert([orderPayload]).select("*").single();
+  const { data, error } = await supabase.from("orders").insert([orderPayload]).select("*, products(name), customer:users!customer_id(full_name), farmer:users!farmer_id(full_name)").single();
   if (!error && data) {
-    await logEvent(LOG_EVENTS.ORDER_PLACE, { produce: orderPayload.produce, amount: orderPayload.amount }, user?.id);
+    await logEvent(LOG_EVENTS.ORDER_PLACE, { produce: payload.produce, amount: payload.amount }, user?.id);
+  } else if (error) {
+    console.error("Save order error:", error);
   }
   return error ? null : normalizeOrder(data);
 };
@@ -1117,20 +1118,74 @@ function BuyerDashboard() {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 3200); };
 
   const placeOrder = async (item, qty, total) => {
-    const newOrderPayload = {
-      produce: sanitizeText(item.name, 200),
-      farmer: sanitizeText(item.farmer, 200),
-      buyer: "Hotel Saravana Bhavan",
-      qty, amount: total, status: "pending",
-      date: new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short" }),
-      payment: "UPI",
-      gst: Math.round(total * 0.05 * 0.18),
-    };
-    const saved = await saveOrderToSupabase(newOrderPayload);
-    if (saved) setOrders([saved, ...orders]);
-    setModal(null);
-    showToast(saved ? `Order placed! ₹${total.toLocaleString()} held in escrow.` : `Order staged locally.`);
-    setView("orders");
+    try {
+      setModal(null);
+      showToast("Initializing secure checkout...");
+      
+      // 1. Create a pending order in the database first
+      const newOrderPayload = {
+        product_id: item.id,
+        farmer_id: item.farmer_id,
+        produce: sanitizeText(item.name, 200),
+        farmer: sanitizeText(item.farmer, 200),
+        qty, amount: total, status: "pending",
+        payment: "Razorpay",
+      };
+      const savedOrder = await saveOrderToSupabase(newOrderPayload);
+      if (!savedOrder) {
+        showToast("Failed to stage order securely.");
+        return;
+      }
+
+      setOrders([savedOrder, ...orders]); // Optimistically show pending order
+
+      // 2. Request a Razorpay Order ID from our secure Edge Function
+      const { data: rzpData, error: rzpError } = await supabase.functions.invoke('create-razorpay-order', {
+        body: { amount: total, currency: 'INR', receipt: savedOrder.id }
+      });
+      
+      if (rzpError || !rzpData) {
+        console.error("Razorpay Error:", rzpError);
+        showToast("Payment gateway initialization failed.");
+        return;
+      }
+
+      // 3. Open Razorpay Checkout Window
+      const options = {
+        key: 'rzp_test_YourKeyHere', // TODO: User needs to replace with actual Test Key
+        amount: rzpData.amount,
+        currency: rzpData.currency,
+        name: "Transparent Marketplace",
+        description: `Secure Escrow: ${qty} ${item.unit} of ${item.name}`,
+        order_id: rzpData.id,
+        handler: async function (response) {
+          // On Success: Update order status to confirmed and save payment securely
+          await supabase.from("orders").update({ status: 'confirmed' }).eq('id', savedOrder.id);
+          await supabase.from("payments").insert([{
+            order_id: savedOrder.id,
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            amount: total,
+            status: 'completed'
+          }]);
+          
+          setOrders(prev => prev.map(o => o.id === savedOrder.id ? { ...o, status: 'confirmed' } : o));
+          showToast(`Payment successful! Order confirmed.`);
+          setView("orders");
+        },
+        theme: { color: "#22c55e" }
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', function (response){
+         showToast("Payment failed or was cancelled.");
+      });
+      rzp.open();
+      
+    } catch (err) {
+      console.error(err);
+      showToast("Error processing checkout.");
+    }
   };
 
   const cats = ["All","Vegetables","Fruits","Other"];
