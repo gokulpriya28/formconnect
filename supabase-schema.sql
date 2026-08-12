@@ -10,72 +10,51 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- ============================================================================
--- PART 1: DATABASE SCHEMA
--- ============================================================================
+-- ── Core Tables ───────────────────────────────────────────────
 
--- Create custom enum types for status tracking
-DO $$ BEGIN
-    CREATE TYPE user_role AS ENUM ('customer', 'farmer', 'admin');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE order_status AS ENUM ('pending', 'confirmed', 'shipped', 'delivered', 'cancelled');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE payment_status AS ENUM ('pending', 'completed', 'failed', 'refunded');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
--- ----------------------------------------------------------------------------
--- 1. USERS TABLE (Extends Supabase auth.users)
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.users (
-  id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
-  role user_role NOT NULL DEFAULT 'customer',
-  full_name TEXT NOT NULL,
-  phone_number TEXT,
-  address TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+create table if not exists public.profiles (
+  id              uuid primary key references auth.users(id) on delete cascade,
+  full_name       text check (char_length(full_name) <= 200),
+  phone           text check (char_length(phone) <= 20),        -- store encrypted at app layer
+  email           text check (char_length(email) <= 254),
+  role            text not null default 'Buyer'
+                    check (role in ('Farmer','Buyer','Admin','Government')),
+  district        text check (char_length(district) <= 100),
+  village         text check (char_length(village) <= 100),
+  profile_image   text check (char_length(profile_image) <= 500),
+  mfa_enrolled    boolean not null default false,
+  is_deleted      boolean not null default false,               -- soft-delete flag
+  deleted_at      timestamptz,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
 );
 
--- ----------------------------------------------------------------------------
--- 2. PRODUCTS TABLE
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.products (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  farmer_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  description TEXT,
-  price DECIMAL(10,2) NOT NULL,
-  stock_quantity INTEGER NOT NULL DEFAULT 0,
-  unit TEXT NOT NULL,
-  image_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ----------------------------------------------------------------------------
--- 3. ORDERS TABLE
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.orders (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  customer_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  farmer_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  product_id UUID NOT NULL REFERENCES public.products(id) ON DELETE RESTRICT,
-  quantity INTEGER NOT NULL,
-  total_price DECIMAL(10,2) NOT NULL,
-  status order_status NOT NULL DEFAULT 'pending',
-  delivery_address TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+create table if not exists public.products (
+  id            uuid primary key default gen_random_uuid(),
+  owner_id      uuid references auth.users(id) on delete cascade,
+  seller_name   text not null default 'Local Farmer'
+                  check (char_length(seller_name) <= 200),
+  seller_role   text not null default 'Farmer',
+  district      text default 'Tamil Nadu' check (char_length(district) <= 100),
+  village       text default 'Tamil Nadu' check (char_length(village) <= 100),
+  name          text not null check (char_length(name) between 1 and 200),
+  emoji         text default '🌾' check (char_length(emoji) <= 10),
+  price         numeric not null default 0
+                  check (price >= 0 and price <= 999999),
+  ms_p          numeric not null default 0
+                  check (ms_p >= 0 and ms_p <= 999999),
+  unit          text not null default 'kg' check (char_length(unit) <= 20),
+  qty           integer not null default 0
+                  check (qty >= 0 and qty <= 1000000),
+  organic       boolean not null default false,
+  express       boolean not null default false,
+  delivery      text default 'Tomorrow' check (char_length(delivery) <= 50),
+  rating        numeric default 4.8 check (rating >= 0 and rating <= 5),
+  reviews       integer default 10 check (reviews >= 0),
+  category      text default 'Vegetables' check (char_length(category) <= 100),
+  image_url     text check (char_length(image_url) <= 500),
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -132,81 +111,107 @@ CREATE TABLE IF NOT EXISTS public.notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ============================================================================
--- PART 2: TRIGGERS
--- ============================================================================
-CREATE OR REPLACE FUNCTION update_modified_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
-DROP TRIGGER IF EXISTS update_users_modtime ON public.users;
-CREATE TRIGGER update_users_modtime BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-
-DROP TRIGGER IF EXISTS update_products_modtime ON public.products;
-CREATE TRIGGER update_products_modtime BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-
-DROP TRIGGER IF EXISTS update_orders_modtime ON public.orders;
-CREATE TRIGGER update_orders_modtime BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-
-DROP TRIGGER IF EXISTS update_payments_modtime ON public.payments;
-CREATE TRIGGER update_payments_modtime BEFORE UPDATE ON public.payments FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-
-DROP TRIGGER IF EXISTS update_reviews_modtime ON public.reviews;
-CREATE TRIGGER update_reviews_modtime BEFORE UPDATE ON public.reviews FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-
-DROP TRIGGER IF EXISTS update_transport_requests_modtime ON public.transport_requests;
-CREATE TRIGGER update_transport_requests_modtime BEFORE UPDATE ON public.transport_requests FOR EACH ROW EXECUTE FUNCTION update_modified_column();
-
-
--- ============================================================================
--- PART 3: ROW LEVEL SECURITY (RLS)
--- ============================================================================
-
--- Helper Functions
-CREATE OR REPLACE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin');
-$$;
-CREATE OR REPLACE FUNCTION public.is_farmer() RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'farmer');
-$$;
-CREATE OR REPLACE FUNCTION public.is_customer() RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'customer');
+-- ── Auto-update timestamps ───────────────────────────────────
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
 $$;
 
--- Enable RLS
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.reviews ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.transport_requests ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+drop trigger if exists profiles_updated_at on public.profiles;
+create trigger profiles_updated_at
+  before update on public.profiles
+  for each row execute function public.set_updated_at();
 
--- users policies
-DROP POLICY IF EXISTS "Users can view their own profile" ON public.users;
-CREATE POLICY "Users can view their own profile" ON public.users FOR SELECT USING (id = auth.uid());
-DROP POLICY IF EXISTS "Admin can view all users" ON public.users;
-CREATE POLICY "Admin can view all users" ON public.users FOR SELECT USING (public.is_admin());
-DROP POLICY IF EXISTS "Users can update their own profile" ON public.users;
-CREATE POLICY "Users can update their own profile" ON public.users FOR UPDATE USING (id = auth.uid()) WITH CHECK (id = auth.uid());
-DROP POLICY IF EXISTS "Admin can update any user" ON public.users;
-CREATE POLICY "Admin can update any user" ON public.users FOR UPDATE USING (public.is_admin()) WITH CHECK (public.is_admin());
+drop trigger if exists products_updated_at on public.products;
+create trigger products_updated_at
+  before update on public.products
+  for each row execute function public.set_updated_at();
 
--- products policies
-DROP POLICY IF EXISTS "Anyone can view products" ON public.products;
-CREATE POLICY "Anyone can view products" ON public.products FOR SELECT USING (true);
-DROP POLICY IF EXISTS "Farmers can insert their own products" ON public.products;
-CREATE POLICY "Farmers can insert their own products" ON public.products FOR INSERT WITH CHECK (auth.uid() = farmer_id AND public.is_farmer());
-DROP POLICY IF EXISTS "Farmers can update their own products" ON public.products;
-CREATE POLICY "Farmers can update their own products" ON public.products FOR UPDATE USING (auth.uid() = farmer_id) WITH CHECK (auth.uid() = farmer_id);
-DROP POLICY IF EXISTS "Farmers can delete their own products" ON public.products;
-CREATE POLICY "Farmers can delete their own products" ON public.products FOR DELETE USING (auth.uid() = farmer_id);
-DROP POLICY IF EXISTS "Admin can manage all products" ON public.products;
-CREATE POLICY "Admin can manage all products" ON public.products FOR ALL USING (public.is_admin());
+-- ── DB-level Audit Trigger ───────────────────────────────────
+-- Automatically log product changes to audit_logs
+create or replace function public.audit_product_change()
+returns trigger language plpgsql security definer as $$
+begin
+  insert into public.audit_logs (user_id, event_type, payload)
+  values (
+    auth.uid(),
+    TG_OP || '_PRODUCT',
+    jsonb_build_object(
+      'product_id', coalesce(new.id, old.id),
+      'name',       coalesce(new.name, old.name),
+      'op',         TG_OP
+    )
+  );
+  return coalesce(new, old);
+end;
+$$;
+
+drop trigger if exists products_audit on public.products;
+create trigger products_audit
+  after insert or update or delete on public.products
+  for each row execute function public.audit_product_change();
+
+-- ── Row Level Security ───────────────────────────────────────
+alter table public.profiles    enable row level security;
+alter table public.products    enable row level security;
+alter table public.orders      enable row level security;
+alter table public.audit_logs  enable row level security;
+alter table public.login_events enable row level security;
+
+-- Drop old policies
+drop policy if exists "profiles_select_own"    on public.profiles;
+drop policy if exists "profiles_select_admin"  on public.profiles;
+drop policy if exists "profiles_upsert_own"    on public.profiles;
+drop policy if exists "profiles_update_own"    on public.profiles;
+drop policy if exists "profiles_update_admin"  on public.profiles;
+drop policy if exists "products_select_all"    on public.products;
+drop policy if exists "products_manage_own"    on public.products;
+drop policy if exists "products_update_own"    on public.products;
+drop policy if exists "products_delete_own"    on public.products;
+drop policy if exists "orders_select_all"      on public.orders;
+drop policy if exists "orders_manage_own"      on public.orders;
+drop policy if exists "orders_update_own"      on public.orders;
+
+-- ── Profiles Policies ────────────────────────────────────────
+-- Users see only their own profile (unless Admin/Govt)
+create policy "profiles_select_own" on public.profiles
+  for select using (auth.uid() = id and is_deleted = false);
+
+create policy "profiles_select_admin" on public.profiles
+  for select using (
+    exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid()
+        and p.role in ('Admin','Government')
+        and p.is_deleted = false
+    )
+  );
+
+-- Users insert their own profile (role locked to Farmer/Buyer only)
+create policy "profiles_insert_own" on public.profiles
+  for insert with check (
+    auth.uid() = id
+    and role in ('Farmer','Buyer')   -- Admin/Govt cannot self-assign
+  );
+
+create policy "profiles_update_own" on public.profiles
+  for update using (auth.uid() = id and is_deleted = false)
+  with check (
+    auth.uid() = id
+    and role in ('Farmer','Buyer')   -- cannot self-elevate to Admin
+  );
+
+-- Admins can update any profile (including role assignment)
+create policy "profiles_update_admin" on public.profiles
+  for update using (
+    exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.role = 'Admin' and p.is_deleted = false
+    )
+  );
 
 -- orders policies
 DROP POLICY IF EXISTS "Customers can create orders" ON public.orders;

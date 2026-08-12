@@ -6,8 +6,7 @@
     <title>FarmConnect — India's Transparent Farm-to-Buyer Marketplace</title>
     <meta name="description" content="FarmConnect connects Tamil Nadu's farmers directly to hotels, restaurants, and corporates. No middlemen, no hidden fees." />
 
-    <!-- ── Security Headers (meta layer; set real HTTP headers on your host) ── -->
-    <!-- Content-Security-Policy: restricts sources to same origin + trusted CDNs -->
+    <!-- Security headers should be applied by the web server, not a <meta> tag. -->
     <meta http-equiv="Content-Security-Policy"
       content="
         default-src 'self';
@@ -21,8 +20,6 @@
         base-uri 'self';
       "
     />
-    <!-- Prevent clickjacking -->
-    <meta http-equiv="X-Frame-Options" content="DENY" />
     <!-- Prevent MIME-type sniffing -->
     <meta http-equiv="X-Content-Type-Options" content="nosniff" />
     <!-- Referrer policy -->
