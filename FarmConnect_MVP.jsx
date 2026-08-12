@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import SettingsPanel from "./src/components/SettingsPanel.jsx";
 import DashboardShell from "./src/components/DashboardShell.jsx";
+import AuthPage from "./src/components/AuthPage.jsx";
 import {
   sanitizeText,
   validateEmail,
@@ -1876,130 +1877,44 @@ export default function App() {
     logEvent(LOG_EVENTS.CONSENT_GIVEN, {});
   };
 
-  // ── Not signed in / Landing ───────────────────────────────────
-  if (!role) {
-    const pwStrength = passwordStrength(password);
-    const pwStrengthLabel = ["","Weak","Fair","Good","Strong","Very Strong"][pwStrength];
+  // ── Not authenticated yet / Auth Page ───────────────────────────────────
+  if (!session) {
     return (
-      <div className="app">
+      <>
         <style>{css}</style>
         {supabaseStatus.state !== "connected" && (
-          <div style={{background: supabaseStatus.state === "missing-config" ? "#FFF7ED" : "#FEF3C7", color:"#92400E", padding:"10px 28px", fontSize:13, borderBottom:"1px solid #FCD34D"}}>
+          <div style={{position:"fixed",top:0,left:0,right:0,background: supabaseStatus.state === "missing-config" ? "#FFF7ED" : "#FEF3C7", color:"#92400E", padding:"10px 28px", fontSize:13, borderBottom:"1px solid #FCD34D", zIndex:200}}>
             {supabaseStatus.state === "missing-config"
               ? "⚙ Supabase is not configured yet. Add your URL and anon key to .env."
               : "⚙ Supabase is configured, but the database tables are not created yet. Run supabase-schema.sql in your Supabase SQL editor."}
           </div>
         )}
+        <AuthPage 
+          onAuthSuccess={() => {/* Component will re-render when session updates */}}
+          session={session}
+          user={user}
+          profileRole={profileRole}
+        />
+      </>
+    );
+  }
+
+  // ── Authenticated but no role selected / Choose Dashboard ───────────────────────────────────
+  if (!role) {
+    return (
+      <div className="app">
+        <style>{css}</style>
         <div className="topbar">
           <div className="topbar-brand">🌱 Farm<span>Connect</span></div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.5)"}}>India's Transparent Farm-to-Buyer Marketplace</div>
         </div>
         <div className="landing">
           <div className="landing-hero">
-            <h1>From Soil<br/>to <em>Sale</em> — Direct</h1>
-            <p>No middlemen. No hidden fees. Every rupee tracked transparently.<br/>FarmConnect connects Tamil Nadu's farmers directly to hotels, restaurants, and corporates.</p>
+            <h1>Welcome, <em>{user?.email?.split("@")[0]}</em></h1>
+            <p>Choose your dashboard to get started.</p>
           </div>
 
-          <div className="flow" style={{padding:"16px 24px",gap:12}}>
-            <div className="flow-node"><div className="flow-node-title">🌾 Farmer</div><div className="flow-node-sub">Lists at ₹35/kg</div></div>
-            <div className="flow-arrow">→</div>
-            <div className="flow-node highlight"><div className="flow-node-title">FarmConnect</div><div className="flow-node-sub">5% platform fee</div></div>
-            <div className="flow-arrow">→</div>
-            <div className="flow-node"><div className="flow-node-title">🏨 Hotel</div><div className="flow-node-sub">Buys at ₹45/kg</div></div>
-            <div className="flow-arrow">→</div>
-            <div className="flow-node amber"><div className="flow-node-title">🏛️ Govt</div><div className="flow-node-sub">GST collected</div></div>
-          </div>
-
-          {/* ── Auth Form ── */}
-          <div className="form-section" style={{maxWidth: 460, width: "100%"}}>
-            <div className="form-section-title">🔐 Secure Authentication</div>
-
-            {idleWarning && (
-              <div className="alert alert-amber">⚠ You'll be signed out in 5 minutes due to inactivity. Move your mouse to stay logged in.</div>
-            )}
-            {authMessage && (
-              <div className={`alert alert-${authMessageType}`}>{authMessage}</div>
-            )}
-            {rateLimitCooldown > 0 && (
-              <div className="alert alert-red">🔒 Too many attempts. Try again in {rateLimitCooldown}s</div>
-            )}
-
-            <div style={{display:"flex",gap:8,marginBottom:12}}>
-              <button id="btn-signin" type="button" className={`btn ${authMode==="signin"?"btn-primary":"btn-outline"}`} onClick={() => { setAuthMode("signin"); setPwErrors([]); setAuthMessage(""); }}>Sign In</button>
-              <button id="btn-signup" type="button" className={`btn ${authMode==="signup"?"btn-primary":"btn-outline"}`} onClick={() => { setAuthMode("signup"); setPwErrors([]); setAuthMessage(""); }}>Sign Up</button>
-            </div>
-
-            <form onSubmit={handleAuthSubmit} autoComplete="on" noValidate>
-              <div className="form-group">
-                <label className="form-label" htmlFor="auth-email">Email</label>
-                <input id="auth-email" className={`form-input${emailError ? " error" : ""}`} type="email" value={email}
-                  onChange={e => { setEmail(e.target.value); setEmailError(""); }}
-                  placeholder="you@example.com" autoComplete="email" required />
-                {emailError && <div className="form-error">{emailError}</div>}
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="auth-password">Password</label>
-                <input id="auth-password" className={`form-input${pwErrors.length ? " error" : ""}`} type="password" value={password}
-                  onChange={e => { setPassword(e.target.value); setPwErrors([]); }}
-                  placeholder={authMode === "signup" ? "Min 8 chars, uppercase, number, special char" : "Your password"}
-                  autoComplete={authMode === "signup" ? "new-password" : "current-password"} required />
-                {authMode === "signup" && <PasswordStrengthBar password={password} />}
-                {pwErrors.length > 0 && (
-                  <div className="form-error">
-                    Password must include: {pwErrors.join(", ")}
-                  </div>
-                )}
-                {authMode === "signin" && (
-                  <button type="button" style={{fontSize:12,color:G.leaf,background:"none",border:"none",cursor:"pointer",textAlign:"left",marginTop:4}}
-                    onClick={() => setShowForgotPw(true)}>
-                    Forgot password?
-                  </button>
-                )}
-              </div>
-
-              {authMode === "signup" && (
-                <>
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="signup-role">Your Role</label>
-                    <select id="signup-role" className="form-select" value={signupRole} onChange={e => setSignupRole(e.target.value)}>
-                      <option value="buyer">Buyer (Hotel / Restaurant / Corporate)</option>
-                      <option value="farmer">Farmer (Grower / Cultivator)</option>
-                      {/* Admin & Govt intentionally excluded — assigned by Admin only */}
-                    </select>
-                    <div className="form-hint">Admin and Government roles are assigned by FarmConnect staff only.</div>
-                  </div>
-                  <div style={{fontSize:12,color:G.stone,marginBottom:12,padding:"10px 12px",background:G.mist,borderRadius:8}}>
-                    By creating an account you agree to our{" "}
-                    <a style={{color:G.leaf,cursor:"pointer"}} onClick={() => setShowTerms(true)}>Terms of Service</a> and{" "}
-                    <a style={{color:G.leaf,cursor:"pointer"}} onClick={() => setShowPolicy(true)}>Privacy Policy</a>.
-                  </div>
-                </>
-              )}
-
-              <button id="btn-auth-submit" className="btn btn-primary" type="submit"
-                disabled={authLoading || rateLimitCooldown > 0} style={{width:"100%"}}>
-                {authLoading ? "Working…" : authMode === "signup" ? "Create Account" : "Sign In"}
-              </button>
-            </form>
-
-            {session && user && (
-              <>
-                <div className="alert alert-green" style={{marginTop:12}}>
-                  ✓ Signed in as <strong>{user.email}</strong>
-                </div>
-                <button type="button" style={{fontSize:12,color:G.red,background:"none",border:"none",cursor:"pointer",textAlign:"left",marginTop:4}}
-                  onClick={() => setShowDeleteAccount(true)}>
-                  🗑 Request Account Deletion
-                </button>
-              </>
-            )}
-
-            <div style={{fontSize:12,color:G.stone,marginTop:10}}>
-              🔒 Secured by Supabase Auth · bcrypt password hashing · JWT session tokens · Rate-limited sign-in
-            </div>
-          </div>
-
-          {session && profileRole && (
+          {profileRole && (
             <div className="alert alert-blue" style={{maxWidth: 520, width: "100%"}}>
               Your account is assigned the <strong>{getRoleLabel(profileRole)}</strong> role. Only that dashboard is available.
             </div>
@@ -2031,27 +1946,11 @@ export default function App() {
               </div>
             ))}
           </div>
-        </div>
 
-        {/* ── Forgot Password Modal ── */}
-        {showForgotPw && (
-          <div className="overlay" onClick={e => e.target===e.currentTarget && setShowForgotPw(false)}>
-            <div className="modal" style={{maxWidth:400}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                <div className="modal-title" style={{fontSize:20}}>Reset Password</div>
-                <button className="btn btn-ghost btn-sm" onClick={() => setShowForgotPw(false)}>✕</button>
-              </div>
-              <p style={{fontSize:13,color:G.stone,marginBottom:16}}>Enter your email and we'll send you a password reset link.</p>
-              {forgotStatus && <div className={`alert ${forgotStatus.includes("sent") ? "alert-green" : "alert-amber"}`}>{forgotStatus}</div>}
-              <div className="form-group">
-                <label className="form-label" htmlFor="forgot-email">Email Address</label>
-                <input id="forgot-email" className="form-input" type="email" value={forgotEmail}
-                  onChange={e => setForgotEmail(e.target.value)} placeholder="you@example.com" />
-              </div>
-              <button className="btn btn-primary" style={{width:"100%"}} onClick={handleForgotPassword}>Send Reset Email</button>
-            </div>
+          <div style={{marginTop:32,textAlign:"center"}}>
+            <button className="btn btn-outline" onClick={handleSignOut}>Sign Out</button>
           </div>
-        )}
+        </div>
 
         {/* ── Delete Account Confirmation ── */}
         {showDeleteAccount && (
