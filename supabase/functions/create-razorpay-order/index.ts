@@ -1,42 +1,79 @@
+// @ts-ignore: Deno runtime import
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import Razorpay from 'https://esm.sh/razorpay@2.8.6'
+
+declare const Deno: {
+  env: {
+    get(name: string): string | undefined
+  }
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-serve(async (req) => {
-  // Handle CORS preflight requests
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  if (req.method !== 'POST') {
+    return new Response(
+      JSON.stringify({ error: 'Method not allowed. Use POST.' }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 },
+    )
+  }
+
   try {
-    const { amount, currency = 'INR', receipt } = await req.json()
+    const body = await req.json()
+    const amount = Number(body?.amount)
+    const currency = body?.currency || 'INR'
+    const receipt = body?.receipt
 
-    // Initialize Razorpay
-    const razorpay = new Razorpay({
-      key_id: Deno.env.get('RAZORPAY_KEY_ID') || '',
-      key_secret: Deno.env.get('RAZORPAY_KEY_SECRET') || '',
-    })
+    if (!amount || Number.isNaN(amount) || amount <= 0) {
+      throw new Error('Invalid amount. Provide a positive numeric amount.')
+    }
+    if (!receipt || typeof receipt !== 'string') {
+      throw new Error('Missing receipt identifier.')
+    }
 
-    // Create Razorpay Order
-    const options = {
-      amount: amount * 100, // amount in the smallest currency unit (paise)
+    const keyId = Deno.env.get('RAZORPAY_KEY_ID')
+    const keySecret = Deno.env.get('RAZORPAY_KEY_SECRET')
+    if (!keyId || !keySecret) {
+      throw new Error('Razorpay credentials are not configured in environment variables.')
+    }
+
+    const authHeader = `Basic ${btoa(`${keyId}:${keySecret}`)}`
+    const payload = {
+      amount: Math.round(amount * 100),
       currency,
       receipt,
+      payment_capture: 1,
     }
-    const order = await razorpay.orders.create(options)
 
+    const razorpayResponse = await fetch('https://api.razorpay.com/v1/orders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authHeader,
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const order = await razorpayResponse.json()
+    if (!razorpayResponse.ok) {
+      const message = order?.error?.description || order?.error || 'Razorpay order creation failed.'
+      throw new Error(message)
+    }
+
+    return new Response(JSON.stringify(order), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
     return new Response(
-      JSON.stringify(order),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
-  } catch (error) {
-    return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: message || 'Unknown error' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 },
     )
   }
