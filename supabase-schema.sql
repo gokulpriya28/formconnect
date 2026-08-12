@@ -22,6 +22,8 @@ create table if not exists public.profiles (
   district        text check (char_length(district) <= 100),
   village         text check (char_length(village) <= 100),
   profile_image   text check (char_length(profile_image) <= 500),
+  profile_type    text check (char_length(profile_type) <= 100),
+  pan_number      text check (char_length(pan_number) <= 20),
   mfa_enrolled    boolean not null default false,
   is_deleted      boolean not null default false,               -- soft-delete flag
   deleted_at      timestamptz,

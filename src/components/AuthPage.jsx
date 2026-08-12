@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient.js";
 import {
-  sanitizeText,
   validateEmail,
   validatePassword,
   passwordStrength,
@@ -522,9 +521,18 @@ export default function AuthPage({
 }) {
   const [authMode, setAuthMode] = useState("signin");
   const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [district, setDistrict] = useState("Tamil Nadu");
+  const [village, setVillage] = useState("");
+  const [panNumber, setPanNumber] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [signupRole, setSignupRole] = useState("buyer");
+  const [signupType, setSignupType] = useState("hotel");
   const [emailError, setEmailError] = useState("");
+  const [confirmError, setConfirmError] = useState("");
   const [pwErrors, setPwErrors] = useState([]);
   const [authMessage, setAuthMessage] = useState("");
   const [authMessageType, setAuthMessageType] = useState("");
@@ -545,6 +553,27 @@ export default function AuthPage({
     return () => clearInterval(timer);
   }, [rateLimitCooldown]);
 
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("farmconnect_remember_email");
+      if (saved) {
+        setEmail(saved);
+        setRememberMe(true);
+      }
+    } catch (error) {
+      // browsers without localStorage support will continue normally
+    }
+  }, []);
+
+  useEffect(() => {
+    if (signupRole === "farmer") {
+      setSignupType((prev) => (prev === "hotel" || prev === "restaurant" || prev === "corporate" || prev === "retailer" ? "grower" : prev));
+    } else {
+      setSignupType((prev) => (prev === "grower" || prev === "organic" || prev === "poultry" || prev === "dairy" ? "hotel" : prev));
+      setPanNumber("");
+    }
+  }, [signupRole]);
+
   const handleAuthSubmit = async (event) => {
     event.preventDefault();
 
@@ -555,6 +584,47 @@ export default function AuthPage({
     setEmailError("");
 
     if (authMode === "signup") {
+      if (!fullName.trim()) {
+        setAuthMessage("Please enter your full name.");
+        setAuthMessageType("error");
+        return;
+      }
+      if (!district.trim()) {
+        setAuthMessage("Please enter your district.");
+        setAuthMessageType("error");
+        return;
+      }
+      if (signupRole === "farmer") {
+        const pan = panNumber.trim().toUpperCase();
+        if (!pan) {
+          setAuthMessage("Please enter your PAN number for farmer verification.");
+          setAuthMessageType("error");
+          return;
+        }
+        if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) {
+          setAuthMessage("PAN number must be a valid 10-character format like ABCDE1234F.");
+          setAuthMessageType("error");
+          return;
+        }
+      }
+      if (!village.trim()) {
+        setAuthMessage("Please enter your village or locality.");
+        setAuthMessageType("error");
+        return;
+      }
+      if (!signupType) {
+        setAuthMessage("Please select your account subtype.");
+        setAuthMessageType("error");
+        return;
+      }
+      if (!confirmPassword) {
+        setConfirmError("Please confirm your password.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setConfirmError("Passwords do not match.");
+        return;
+      }
       const { valid, errors } = validatePassword(password);
       if (!valid) {
         setPwErrors(errors);
@@ -565,6 +635,7 @@ export default function AuthPage({
         setAuthMessageType("error");
         return;
       }
+      setConfirmError("");
       setPwErrors([]);
     }
 
@@ -572,6 +643,18 @@ export default function AuthPage({
       setAuthMessage("Please enter your password.");
       setAuthMessageType("warning");
       return;
+    }
+
+    if (authMode === "signin") {
+      try {
+        if (rememberMe) {
+          localStorage.setItem("farmconnect_remember_email", email.trim().toLowerCase());
+        } else {
+          localStorage.removeItem("farmconnect_remember_email");
+        }
+      } catch (error) {
+        // ignore storage errors
+      }
     }
 
     const rl = rateLimiters.login();
@@ -591,15 +674,55 @@ export default function AuthPage({
 
     try {
       if (authMode === "signup") {
+        const normalizedRole = signupRole === "farmer" ? "Farmer" : "Buyer";
+        const profileType = signupRole === "farmer"
+          ? {
+              grower: "Grower",
+              organic: "Organic Farmer",
+              poultry: "Poultry Farmer",
+              dairy: "Dairy Farmer",
+            }[signupType] || "Grower"
+          : {
+              hotel: "Hotel Buyer",
+              restaurant: "Restaurant Buyer",
+              corporate: "Corporate Buyer",
+              retailer: "Retailer",
+            }[signupType] || "Hotel Buyer";
+
         const { data, error } = await supabase.auth.signUp({
           email: email.trim().toLowerCase(),
           password,
           options: {
-            data: { signup_role: signupRole },
+            data: {
+              signup_role: signupRole,
+              signup_type: signupType,
+              profile_type: profileType,
+              full_name: fullName.trim(),
+              phone: phone.trim(),
+              district,
+              village: village.trim(),
+              pan_number: signupRole === "farmer" ? panNumber.trim().toUpperCase() : null,
+            },
           },
         });
         if (error) throw error;
         await logEvent(LOG_EVENTS.SIGNUP, { role: signupRole }, data?.user?.id);
+
+        if (data?.user?.id) {
+          await supabase.from("profiles").upsert({
+            id: data.user.id,
+            email: email.trim().toLowerCase(),
+            full_name: fullName.trim(),
+            role: normalizedRole,
+            profile_type: profileType,
+            phone: phone.trim(),
+            district,
+            village: village.trim(),
+            pan_number: signupRole === "farmer" ? panNumber.trim().toUpperCase() : null,
+            created_at: new Date().toISOString(),
+          }, { onConflict: "id" });
+        }
+
         setAuthMessage(
           "Account created! Check your email to confirm before signing in."
         );
@@ -607,6 +730,8 @@ export default function AuthPage({
         setTimeout(() => {
           setAuthMode("signin");
           setPassword("");
+          setConfirmPassword("");
+          setPanNumber("");
           setAgreedToTerms(false);
         }, 2000);
       } else {
@@ -795,6 +920,101 @@ export default function AuthPage({
                   )}
                 </div>
 
+                {authMode === "signup" && (
+                  <>
+                    <div className="auth-form-group">
+                      <label className="auth-form-label" htmlFor="auth-fullname">
+                        Full Name
+                        <span className="auth-form-label-required">*</span>
+                      </label>
+                      <input
+                        id="auth-fullname"
+                        className="auth-form-input"
+                        type="text"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        placeholder="Raman Kumar"
+                        autoComplete="name"
+                        required
+                      />
+                    </div>
+
+                    <div className="auth-form-group">
+                      <label className="auth-form-label" htmlFor="auth-phone">
+                        Phone Number
+                      </label>
+                      <input
+                        id="auth-phone"
+                        className="auth-form-input"
+                        type="tel"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="+91 98765 43210"
+                        autoComplete="tel"
+                      />
+                      <div className="auth-form-hint">
+                        Optional, but helps buyers and support contact you faster.
+                      </div>
+                    </div>
+
+                    {signupRole === "farmer" && (
+                      <div className="auth-form-group">
+                        <label className="auth-form-label" htmlFor="auth-pan-number">
+                          PAN Number
+                          <span className="auth-form-label-required">*</span>
+                        </label>
+                        <input
+                          id="auth-pan-number"
+                          className="auth-form-input"
+                          type="text"
+                          value={panNumber}
+                          onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
+                          placeholder="ABCDE1234F"
+                          autoComplete="off"
+                          maxLength={10}
+                          required
+                        />
+                        <div className="auth-form-hint">
+                          Required for farmers. Used only for identity verification on FarmConnect.
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="auth-form-row">
+                      <div className="auth-form-group" style={{ flex: 1 }}>
+                        <label className="auth-form-label" htmlFor="auth-district">
+                          District
+                          <span className="auth-form-label-required">*</span>
+                        </label>
+                        <input
+                          id="auth-district"
+                          className="auth-form-input"
+                          type="text"
+                          value={district}
+                          onChange={(e) => setDistrict(e.target.value)}
+                          placeholder="Tamil Nadu"
+                          required
+                        />
+                      </div>
+                      <div className="auth-form-group" style={{ flex: 1 }}>
+                        <label className="auth-form-label" htmlFor="auth-village">
+                          Village / Locality
+                          <span className="auth-form-label-required">*</span>
+                        </label>
+                        <input
+                          id="auth-village"
+                          className="auth-form-input"
+                          type="text"
+                          value={village}
+                          onChange={(e) => setVillage(e.target.value)}
+                          placeholder="Erode"
+                          required
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 <div className="auth-form-group">
                   <label className="auth-form-label" htmlFor="auth-password">
                     Password
@@ -827,6 +1047,23 @@ export default function AuthPage({
                       Password must include: {pwErrors.join(", ")}
                     </div>
                   )}
+                  {confirmError && (
+                    <div className="auth-form-error">{confirmError}</div>
+                  )}
+                  {authMode === "signin" && (
+                    <div className="auth-checkbox-group" style={{ marginTop: 8 }}>
+                      <input
+                        type="checkbox"
+                        id="remember-me"
+                        className="auth-checkbox-input"
+                        checked={rememberMe}
+                        onChange={(e) => setRememberMe(e.target.checked)}
+                      />
+                      <label htmlFor="remember-me" className="auth-checkbox-label">
+                        Remember me on this device
+                      </label>
+                    </div>
+                  )}
                   {authMode === "signin" && (
                     <button
                       type="button"
@@ -841,6 +1078,26 @@ export default function AuthPage({
                 {authMode === "signup" && (
                   <>
                     <div className="auth-form-group">
+                      <label className="auth-form-label" htmlFor="auth-confirm-password">
+                        Confirm Password
+                        <span className="auth-form-label-required">*</span>
+                      </label>
+                      <input
+                        id="auth-confirm-password"
+                        className="auth-form-input"
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(e) => {
+                          setConfirmPassword(e.target.value);
+                          setConfirmError("");
+                        }}
+                        placeholder="Re-enter your password"
+                        autoComplete="new-password"
+                        required
+                      />
+                    </div>
+
+                    <div className="auth-form-group">
                       <label className="auth-form-label" htmlFor="signup-role">
                         Your Role
                         <span className="auth-form-label-required">*</span>
@@ -851,11 +1108,43 @@ export default function AuthPage({
                         value={signupRole}
                         onChange={(e) => setSignupRole(e.target.value)}
                       >
-                        <option value="buyer">🏨 Buyer (Hotel / Restaurant / Corporate)</option>
-                        <option value="farmer">🌾 Farmer (Grower / Cultivator)</option>
+                        <option value="buyer">🏨 Buyer</option>
+                        <option value="farmer">🌾 Farmer</option>
                       </select>
                       <div className="auth-form-hint">
-                        Admin and Government roles are assigned by FarmConnect staff.
+                        Choose a buyer or farmer account type to get the right marketplace experience.
+                      </div>
+                    </div>
+
+                    <div className="auth-form-group">
+                      <label className="auth-form-label" htmlFor="signup-type">
+                        {signupRole === "farmer" ? "Farmer Type" : "Buyer Type"}
+                        <span className="auth-form-label-required">*</span>
+                      </label>
+                      <select
+                        id="signup-type"
+                        className="auth-form-select"
+                        value={signupType}
+                        onChange={(e) => setSignupType(e.target.value)}
+                      >
+                        {signupRole === "farmer" ? (
+                          <>
+                            <option value="grower">🌾 Grower</option>
+                            <option value="organic">🌿 Organic Farmer</option>
+                            <option value="poultry">🐔 Poultry Farmer</option>
+                            <option value="dairy">🥛 Dairy Farmer</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="hotel">🏨 Hotel Buyer</option>
+                            <option value="restaurant">🍽️ Restaurant Buyer</option>
+                            <option value="corporate">🏢 Corporate Buyer</option>
+                            <option value="retailer">🛒 Retailer</option>
+                          </>
+                        )}
+                      </select>
+                      <div className="auth-form-hint">
+                        Select the type that best matches your business or farm profile.
                       </div>
                     </div>
 

@@ -5,6 +5,7 @@ export default function DashboardShell({
   role,
   setRole,
   profileRole,
+  profile,
   session,
   user,
   settingsOpen,
@@ -43,7 +44,7 @@ export default function DashboardShell({
       </div>
 
       {session && <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} role={role || "farmer"} />}
-      {role === "farmer" && <FarmerDashboard />}
+      {role === "farmer" && <FarmerDashboard profile={profile} />}
       {role === "buyer" && <BuyerDashboard />}
       {role === "admin" && <AdminDashboard role="admin" />}
       {role === "govt" && <AdminDashboard role="govt" />}

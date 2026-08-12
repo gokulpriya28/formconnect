@@ -483,6 +483,8 @@ const createProfileForUser = async ({ id, email, fullName, role = "Buyer" }) => 
     email: sanitizeText(email, 254),
     full_name: sanitizeText(fullName, 200),
     role,
+    district: "Tamil Nadu",
+    village: "Unknown",
     created_at: new Date().toISOString(),
   };
   const { data, error } = await supabase.from("profiles").upsert(profilePayload, { onConflict: "id" }).select("*").single();
@@ -762,7 +764,7 @@ function OrderModal({ item, onClose, onOrder }) {
 }
 
 // ─── FARMER DASHBOARD ────────────────────────────────────────────
-function FarmerDashboard() {
+function FarmerDashboard({ profile }) {
   const [view, setView] = useState("home");
   const [toast, setToast] = useState(null);
   const [listingForm, setListingForm] = useState({ produce:"", qty:"", price:"", date:"", organic:false });
@@ -772,6 +774,23 @@ function FarmerDashboard() {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadError, setUploadError] = useState("");
   const [uploadProgress, setUploadProgress] = useState(false);
+  const [qrUrl, setQrUrl] = useState("");
+
+  const farmerId = profile?.id ? `FC-${String(profile.id).slice(0, 8).toUpperCase()}` : "FC-00000000";
+
+  useEffect(() => {
+    if (!profile?.id) {
+      setQrUrl("");
+      return;
+    }
+    const qrPayload = JSON.stringify({
+      id: farmerId,
+      name: profile.full_name,
+      role: profile.role,
+      email: profile.email,
+    });
+    setQrUrl(`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(qrPayload)}`);
+  }, [profile?.id, profile?.full_name, profile?.role, profile?.email, farmerId]);
 
   useEffect(() => {
     let active = true;
@@ -841,6 +860,7 @@ function FarmerDashboard() {
 
   const nav = [
     { key:"home", icon:"🏠", label:"Home" },
+    { key:"idcard", icon:"🆔", label:"ID Card" },
     { key:"listings", icon:"📦", label:"My Listings" },
     { key:"add", icon:"➕", label:"Add Produce" },
     { key:"orders", icon:"📋", label:"Orders" },
@@ -919,6 +939,41 @@ function FarmerDashboard() {
             </table>
           </div>
         </>}
+
+        {view === "idcard" && (
+          <>
+            <div className="page-title">Farmer ID Card</div>
+            <div className="page-subtitle">Your PAN-style FarmConnect ID card with a unique QR code for fast verification.</div>
+            <div className="id-card">
+              <div className="id-card-left">
+                <div className="id-card-brand">FarmConnect</div>
+                <div className="id-card-title">Farmer Identity</div>
+                <div className="id-card-subtitle">Official farmer identification for the FarmConnect marketplace.</div>
+                <div className="id-card-field"><span>ID Number</span><strong>{farmerId}</strong></div>
+                <div className="id-card-field"><span>Name</span><strong>{profile?.full_name || "Unknown Farmer"}</strong></div>
+                <div className="id-card-field"><span>Role</span><strong>{profile?.role || "Farmer"}</strong></div>
+                {profile?.profile_type && (
+                  <div className="id-card-field"><span>Type</span><strong>{profile.profile_type}</strong></div>
+                )}
+                <div className="id-card-field"><span>District</span><strong>{profile?.district || "Tamil Nadu"}</strong></div>
+                <div className="id-card-field"><span>Village</span><strong>{profile?.village || "Unknown"}</strong></div>
+                {profile?.pan_number && (
+                  <div className="id-card-field"><span>PAN</span><strong>{profile.pan_number}</strong></div>
+                )}
+                <div className="id-card-field"><span>Email</span><strong>{profile?.email || "n/a"}</strong></div>
+                <div className="id-card-footer">Issued: {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : "-"}</div>
+              </div>
+              <div className="id-card-right">
+                {qrUrl ? (
+                  <img src={qrUrl} alt="Farmer QR Code" className="id-card-qr" />
+                ) : (
+                  <div className="id-card-qr placeholder">Generating QR code…</div>
+                )}
+                <div className="id-card-badge">Scan to verify</div>
+              </div>
+            </div>
+          </>
+        )}
 
         {view==="add" && <>
           <div className="page-title">List New Produce</div>
@@ -1729,6 +1784,7 @@ export default function App() {
   const [authMessageType, setAuthMessageType] = useState("amber"); // 'green' | 'amber' | 'red'
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [profileRole, setProfileRole] = useState(null);
   const [signupRole, setSignupRole] = useState("buyer");
   const [consentGiven, setConsentGiven] = useState(() => localStorage.getItem("fc_consent") === "1");
@@ -1791,18 +1847,18 @@ export default function App() {
       const { data: { session: s } } = await supabase.auth.getSession();
       if (!active) return;
       setSession(s); setUser(s?.user ?? null);
-      if (!s?.user) { setProfileRole(null); setRole(null); return; }
-      const { data } = await supabase.from("profiles").select("role").eq("id", s.user.id).maybeSingle();
+      if (!s?.user) { setProfileRole(null); setProfile(null); setRole(null); return; }
+      const { data } = await supabase.from("profiles").select("id,full_name,email,role,district,village,pan_number,created_at").eq("id", s.user.id).maybeSingle();
       if (!active) return;
       const nextRole = normalizeRoleValue(data?.role);
-      setProfileRole(nextRole); setRole(nextRole);
+      setProfileRole(nextRole); setProfile(data || null); setRole(nextRole);
     })();
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       if (!active) return;
       setSession(s); setUser(s?.user ?? null);
       if (!s?.user) { setProfileRole(null); setRole(null); return; }
       if (_event === "SIGNED_IN") { setAuthMessage("Signed in successfully."); setAuthMessageType("green"); resetBucket("login"); }
-      if (_event === "SIGNED_OUT") { setProfileRole(null); setRole(null); setAuthMessage("Signed out."); setAuthMessageType("amber"); }
+      if (_event === "SIGNED_OUT") { setProfileRole(null); setProfile(null); setRole(null); setAuthMessage("Signed out."); setAuthMessageType("amber"); }
     });
     return () => { active = false; subscription.unsubscribe(); };
   }, []);
@@ -2049,6 +2105,7 @@ export default function App() {
       role={role}
       setRole={setRole}
       profileRole={profileRole}
+      profile={profile}
       session={session}
       user={user}
       settingsOpen={settingsOpen}
