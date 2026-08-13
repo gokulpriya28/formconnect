@@ -4,28 +4,21 @@ import { supabase } from "../../supabaseClient.js";
 const STORAGE_KEY = "agriLens_settings_v1";
 
 const defaultSettings = {
-  profile: {
-    name: "Raman Patel",
-    email: "raman@agrilens.in",
-    phone: "+91 98765 43210",
-    role: "Farmer",
-  },
+  profile: { name: "Raman Patel", email: "raman@agrilens.in", phone: "+91 98765 43210", role: "Farmer" },
   notifications: {
     diseaseAlerts: true,
     weatherAlerts: true,
-    marketPriceAlerts: false,
+    marketPriceAlerts: true,
     governmentAlerts: true,
     orderUpdates: true,
     paymentUpdates: true,
     cropReminders: true,
     promotionalNotifications: false,
   },
-  appearance: {
-    theme: "system",
-    mode: "farmer",
-    fontSize: "medium",
-  },
+  appearance: { theme: "system", mode: "farmer", fontSize: "medium" },
   language: "ta",
+  currency: "INR",
+  dateFormat: "DD/MM/YYYY",
   privacy: {
     cameraPermission: false,
     locationPermission: true,
@@ -76,6 +69,29 @@ const modeOptions = [
   { value: "expert", label: "Expert Mode" },
 ];
 
+const roleSpecificSections = {
+  farmer: [
+    { key: "farm", title: "Farm Profile", body: "Manage land, irrigation, crop calendar, and soil health details." },
+    { key: "ai", title: "AI Agriculture Preferences", body: "Tune crop health thresholds, disease detection, and risk alerts." },
+    { key: "benefits", title: "Government Benefits", body: "Track subsidy eligibility and scheme application reminders." },
+  ],
+  buyer: [
+    { key: "business", title: "Business Profile", body: "Manage procurement preferences, GST details, and supplier tracking." },
+    { key: "delivery", title: "Delivery Preferences", body: "Save pickup and delivery points and repeat order defaults." },
+    { key: "payment", title: "Payment Settings", body: "Manage UPI, invoices, and settlement preferences for orders." },
+  ],
+  admin: [
+    { key: "platform", title: "Platform Governance", body: "Configure compliance, oversight rules, and platform-level controls." },
+    { key: "rbac", title: "RBAC & Permissions", body: "Review access restrictions and privileged workflows." },
+    { key: "audit", title: "Audit & Security", body: "Track role changes, system events, and suspicious activity." },
+  ],
+  govt: [
+    { key: "department", title: "Department Profile", body: "Configure office metadata, officer roles, and reporting lines." },
+    { key: "scheme", title: "Scheme Monitoring", body: "Create and review agricultural benefit scheme rules and impact." },
+    { key: "eligibility", title: "Eligibility Rules", body: "Manage district-specific and crop-specific rule engines." },
+  ],
+};
+
 const panelStyle = {
   position: "fixed",
   inset: 0,
@@ -101,7 +117,16 @@ function readStoredSettings() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultSettings;
-    return { ...defaultSettings, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    return {
+      ...defaultSettings,
+      ...parsed,
+      profile: { ...defaultSettings.profile, ...(parsed.profile || {}) },
+      notifications: { ...defaultSettings.notifications, ...(parsed.notifications || {}) },
+      appearance: { ...defaultSettings.appearance, ...(parsed.appearance || {}) },
+      privacy: { ...defaultSettings.privacy, ...(parsed.privacy || {}) },
+      offline: { ...defaultSettings.offline, ...(parsed.offline || {}) },
+    };
   } catch {
     return defaultSettings;
   }
@@ -129,20 +154,25 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
           return;
         }
 
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("settings")
-          .eq("id", user.id)
-          .maybeSingle();
-
+        const { data, error } = await supabase.from("profiles").select("settings").eq("id", user.id).maybeSingle();
         if (error) {
           setSettings(readStoredSettings());
           return;
         }
 
         const next = data?.settings && typeof data.settings === "object" ? data.settings : {};
-        setSettings({ ...defaultSettings, ...next });
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...defaultSettings, ...next }));
+        const merged = {
+          ...defaultSettings,
+          ...next,
+          profile: { ...defaultSettings.profile, ...(next.profile || {}) },
+          notifications: { ...defaultSettings.notifications, ...(next.notifications || {}) },
+          appearance: { ...defaultSettings.appearance, ...(next.appearance || {}) },
+          privacy: { ...defaultSettings.privacy, ...(next.privacy || {}) },
+          offline: { ...defaultSettings.offline, ...(next.offline || {}) },
+        };
+
+        setSettings(merged);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
       } catch {
         setSettings(readStoredSettings());
       } finally {
@@ -159,27 +189,9 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
   }, [settings, open]);
 
   const summary = useMemo(() => {
-    const enabled = Object.values(settings.notifications).filter(Boolean).length;
+    const enabled = Object.values(settings.notifications || {}).filter(Boolean).length;
     return `${enabled} alerts active`;
   }, [settings.notifications]);
-
-  if (!open) return null;
-
-  const roleSpecificSections = {
-    farmer: [
-      { key: "farm", title: "Farm & crop settings", body: "Farm name, irrigation mode, crop calendar, soil health, and field alerts." },
-      { key: "ai", title: "AI & crop analysis", body: "Saved diagnoses, treatment recommendations, confidence levels, and crop preferences." },
-    ],
-    buyer: [
-      { key: "market", title: "Marketplace preferences", body: "Saved products, delivery addresses, price alerts, and order notifications." },
-    ],
-    admin: [
-      { key: "admin", title: "Administration", body: "Audit access, compliance preferences, team permissions, and system alerts." },
-    ],
-    govt: [
-      { key: "govt", title: "Government compliance", body: "Report preferences, scheme alerts, market transparency, and compliance summary." },
-    ],
-  };
 
   const updateProfile = (field, value) => {
     setSaved(false);
@@ -188,26 +200,17 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
 
   const updateNotification = (key, value) => {
     setSaved(false);
-    setSettings(prev => ({
-      ...prev,
-      notifications: { ...prev.notifications, [key]: value },
-    }));
+    setSettings(prev => ({ ...prev, notifications: { ...prev.notifications, [key]: value } }));
   };
 
   const updateAppearance = (field, value) => {
     setSaved(false);
-    setSettings(prev => ({
-      ...prev,
-      appearance: { ...prev.appearance, [field]: value },
-    }));
+    setSettings(prev => ({ ...prev, appearance: { ...prev.appearance, [field]: value } }));
   };
 
   const updatePrivacy = (key, value) => {
     setSaved(false);
-    setSettings(prev => ({
-      ...prev,
-      privacy: { ...prev.privacy, [key]: value },
-    }));
+    setSettings(prev => ({ ...prev, privacy: { ...prev.privacy, [key]: value } }));
   };
 
   const saveSettings = async () => {
@@ -217,14 +220,8 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
       try {
         const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (!userError && user) {
-          const { error } = await supabase
-            .from("profiles")
-            .update({ settings: settings, updated_at: new Date().toISOString() })
-            .eq("id", user.id);
-
-          if (error) {
-            console.error("Supabase settings save failed:", error);
-          }
+          const { error } = await supabase.from("profiles").update({ settings, updated_at: new Date().toISOString() }).eq("id", user.id);
+          if (error) console.error("Supabase settings save failed:", error);
         }
       } catch (error) {
         console.error("Settings sync failed:", error);
@@ -235,24 +232,18 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
     window.setTimeout(() => setSaved(false), 1800);
   };
 
+  if (!open) return null;
+
   return (
     <div style={panelStyle} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={cardStyle}>
         <div style={{ position: "sticky", top: 0, background: "#ffffff", zIndex: 1, borderBottom: "1px solid #e5e7eb", padding: "20px 24px 18px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
             <div>
-              <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1.1, color: "#6b7280", fontWeight: 700 }}>
-                AgriLens Settings
-              </div>
+              <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1.1, color: "#6b7280", fontWeight: 700 }}>AgriLens Settings</div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "#1b4332" }}>Settings</div>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{ border: "1px solid #d1d5db", borderRadius: 10, background: "#f9fafb", padding: "8px 12px", cursor: "pointer", fontWeight: 700 }}
-            >
-              Close
-            </button>
+            <button type="button" onClick={onClose} style={{ border: "1px solid #d1d5db", borderRadius: 10, background: "#f9fafb", padding: "8px 12px", cursor: "pointer", fontWeight: 700 }}>Close</button>
           </div>
         </div>
 
@@ -261,18 +252,10 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
             <section style={{ border: "1px solid #edf2f7", borderRadius: 18, padding: 18, background: "#f8fafc" }}>
               <div style={{ fontSize: 16, fontWeight: 800, color: "#1b4332", marginBottom: 12 }}>Account</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-                <Field label="Name">
-                  <input value={settings.profile.name} onChange={(e) => updateProfile("name", e.target.value)} style={inputStyle} />
-                </Field>
-                <Field label="Email">
-                  <input value={settings.profile.email} onChange={(e) => updateProfile("email", e.target.value)} style={inputStyle} />
-                </Field>
-                <Field label="Phone number">
-                  <input value={settings.profile.phone} onChange={(e) => updateProfile("phone", e.target.value)} style={inputStyle} />
-                </Field>
-                <Field label="Role">
-                  <input value={settings.profile.role} disabled style={{ ...inputStyle, background: "#f3f4f6", color: "#4b5563" }} />
-                </Field>
+                <Field label="Name"><input value={settings.profile.name} onChange={(e) => updateProfile("name", e.target.value)} style={inputStyle} /></Field>
+                <Field label="Email"><input value={settings.profile.email} onChange={(e) => updateProfile("email", e.target.value)} style={inputStyle} /></Field>
+                <Field label="Phone number"><input value={settings.profile.phone} onChange={(e) => updateProfile("phone", e.target.value)} style={inputStyle} /></Field>
+                <Field label="Role"><input value={settings.profile.role} disabled style={{ ...inputStyle, background: "#f3f4f6", color: "#4b5563" }} /></Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
                 <button type="button" style={primaryButton}>Change password</button>
@@ -288,12 +271,7 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                 {toggleItems.map(item => (
-                  <ToggleRow
-                    key={item.key}
-                    label={item.label}
-                    value={settings.notifications[item.key]}
-                    onChange={(value) => updateNotification(item.key, value)}
-                  />
+                  <ToggleRow key={item.key} label={item.label} value={settings.notifications[item.key]} onChange={(value) => updateNotification(item.key, value)} />
                 ))}
               </div>
             </section>
@@ -301,34 +279,10 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
             <section style={{ border: "1px solid #edf2f7", borderRadius: 18, padding: 18, background: "#f8fafc" }}>
               <div style={{ fontSize: 16, fontWeight: 800, color: "#1b4332", marginBottom: 12 }}>Appearance & Language</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
-                <Field label="Language">
-                  <select value={settings.language} onChange={(e) => setSettings(prev => ({ ...prev, language: e.target.value }))} style={inputStyle}>
-                    {languageOptions.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Theme">
-                  <select value={settings.appearance.theme} onChange={(e) => updateAppearance("theme", e.target.value)} style={inputStyle}>
-                    {themeOptions.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Font size">
-                  <select value={settings.appearance.fontSize} onChange={(e) => updateAppearance("fontSize", e.target.value)} style={inputStyle}>
-                    {fontOptions.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Mode">
-                  <select value={settings.appearance.mode} onChange={(e) => updateAppearance("mode", e.target.value)} style={inputStyle}>
-                    {modeOptions.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </Field>
+                <Field label="Language"><select value={settings.language} onChange={(e) => setSettings(prev => ({ ...prev, language: e.target.value }))} style={inputStyle}>{languageOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
+                <Field label="Theme"><select value={settings.appearance.theme} onChange={(e) => updateAppearance("theme", e.target.value)} style={inputStyle}>{themeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
+                <Field label="Font size"><select value={settings.appearance.fontSize} onChange={(e) => updateAppearance("fontSize", e.target.value)} style={inputStyle}>{fontOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
+                <Field label="Mode"><select value={settings.appearance.mode} onChange={(e) => updateAppearance("mode", e.target.value)} style={inputStyle}>{modeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>
               </div>
             </section>
 
@@ -360,31 +314,15 @@ export default function SettingsPanel({ open, onClose, role = "farmer" }) {
               <div style={{ fontSize: 16, fontWeight: 800, color: "#1b4332", marginBottom: 12 }}>Data & Offline</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
                 <ToggleRow label="Wi‑Fi only downloads" value={settings.offline.wifiOnlyDownloads} onChange={(value) => setSettings(prev => ({ ...prev, offline: { ...prev.offline, wifiOnlyDownloads: value } }))} />
-                <Field label="Mobile data usage">
-                  <select value={settings.offline.mobileDataUsage} onChange={(e) => setSettings(prev => ({ ...prev, offline: { ...prev.offline, mobileDataUsage: e.target.value } }))} style={inputStyle}>
-                    <option value="balanced">Balanced</option>
-                    <option value="limited">Limited</option>
-                    <option value="unrestricted">Unrestricted</option>
-                  </select>
-                </Field>
-                <Field label="Sync status">
-                  <input value={settings.offline.syncStatus} onChange={(e) => setSettings(prev => ({ ...prev, offline: { ...prev.offline, syncStatus: e.target.value } }))} style={inputStyle} />
-                </Field>
-              </div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
-                <button type="button" style={primaryButton}>Sync data</button>
-                <button type="button" style={secondaryButton}>Clear cache</button>
+                <Field label="Mobile data usage"><select value={settings.offline.mobileDataUsage} onChange={(e) => setSettings(prev => ({ ...prev, offline: { ...prev.offline, mobileDataUsage: e.target.value } }))} style={inputStyle}><option value="balanced">Balanced</option><option value="limited">Limited</option><option value="unrestricted">Unrestricted</option></select></Field>
+                <Field label="Sync status"><input value={settings.offline.syncStatus} onChange={(e) => setSettings(prev => ({ ...prev, offline: { ...prev.offline, syncStatus: e.target.value } }))} style={inputStyle} /></Field>
               </div>
             </section>
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 20, flexWrap: "wrap" }}>
             <div style={{ fontSize: 13, color: "#4b5563" }}>
-              {saved
-                ? "✓ Settings saved locally and synced to your profile if Supabase is connected."
-                : loadingSettings
-                  ? "Loading your saved settings..."
-                  : "Changes are stored locally and synced to your profile when Supabase is available."}
+              {saved ? "✓ Settings saved locally and synced to your profile if Supabase is connected." : loadingSettings ? "Loading your saved settings..." : "Changes are stored locally and synced to your profile when Supabase is available."}
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button type="button" style={secondaryButton} onClick={onClose}>Cancel</button>
@@ -410,33 +348,8 @@ function ToggleRow({ label, value, onChange }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderRadius: 12, background: "#ffffff", border: "1px solid #e5e7eb" }}>
       <span style={{ fontSize: 13, fontWeight: 600, color: "#1f2937" }}>{label}</span>
-      <button
-        type="button"
-        onClick={() => onChange(!value)}
-        style={{
-          width: 50,
-          height: 28,
-          borderRadius: 999,
-          border: "none",
-          background: value ? "#2d6a4f" : "#d1d5db",
-          position: "relative",
-          cursor: "pointer",
-          transition: "all 0.2s ease",
-        }}
-      >
-        <span
-          style={{
-            width: 20,
-            height: 20,
-            borderRadius: "50%",
-            position: "absolute",
-            background: "#fff",
-            top: 4,
-            left: value ? 26 : 4,
-            transition: "all 0.2s ease",
-            boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
-          }}
-        />
+      <button type="button" onClick={() => onChange(!value)} style={{ width: 50, height: 28, borderRadius: 999, border: "none", background: value ? "#2d6a4f" : "#d1d5db", position: "relative", cursor: "pointer", transition: "all 0.2s ease" }}>
+        <span style={{ width: 20, height: 20, borderRadius: "50%", position: "absolute", background: "#fff", top: 4, left: value ? 26 : 4, transition: "all 0.2s ease", boxShadow: "0 1px 4px rgba(0,0,0,0.15)" }} />
       </button>
     </div>
   );
@@ -452,33 +365,6 @@ const inputStyle = {
   color: "#111827",
   outline: "none",
 };
-
-const primaryButton = {
-  background: "#1b4332",
-  color: "#ffffff",
-  border: "none",
-  borderRadius: 10,
-  padding: "10px 16px",
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const secondaryButton = {
-  background: "#ffffff",
-  color: "#1f2937",
-  border: "1px solid #d1d5db",
-  borderRadius: 10,
-  padding: "10px 16px",
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const dangerButton = {
-  background: "#dc2626",
-  color: "#ffffff",
-  border: "none",
-  borderRadius: 10,
-  padding: "10px 16px",
-  fontWeight: 700,
-  cursor: "pointer",
-};
+const primaryButton = { background: "#1b4332", color: "#ffffff", border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, cursor: "pointer" };
+const secondaryButton = { background: "#ffffff", color: "#1f2937", border: "1px solid #d1d5db", borderRadius: 10, padding: "10px 16px", fontWeight: 700, cursor: "pointer" };
+const dangerButton = { background: "#dc2626", color: "#ffffff", border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, cursor: "pointer" };

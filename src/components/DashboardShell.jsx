@@ -18,6 +18,8 @@ export default function DashboardShell({
   AdminDashboard,
   supabaseStatus,
 }) {
+  const visibleRoles = getVisibleRoleCards(profileRole || role || "farmer");
+
   return (
     <div className="app">
       <style>{css}</style>
@@ -29,9 +31,9 @@ export default function DashboardShell({
       )}
 
       <div className="topbar">
-        <div className="topbar-brand">🌱 Farm<span>Connect</span></div>
+        <div className="topbar-brand">🌱 Agri<span>Lens</span></div>
         <div className="topbar-nav">
-          {getVisibleRoleCards(profileRole).map(({ role: roleKey, label, icon }) => (
+          {visibleRoles.map(({ role: roleKey, label, icon }) => (
             <button key={roleKey} className={`nav-btn${role === roleKey ? " active" : ""}`} onClick={() => openRole(roleKey)}>
               {icon} {label}
             </button>
